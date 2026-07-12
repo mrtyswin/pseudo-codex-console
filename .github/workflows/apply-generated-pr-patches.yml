@@ -16,10 +16,15 @@ jobs:
         with:
           ref: ${{ github.head_ref }}
           fetch-depth: 0
-      - name: Apply pending dispatcher patch
+      - name: Apply pending generated changes
         id: apply
         run: |
           changed=0
+          if [ -f .pseudo-codex/finalize-github-direct.py ]; then
+            python3 .pseudo-codex/finalize-github-direct.py
+            rm .pseudo-codex/finalize-github-direct.py
+            changed=1
+          fi
           if [ -f .pseudo-codex/phase3.part.0 ]; then
             cat .pseudo-codex/phase3.part.* > .pseudo-codex/phase3.patch
             python3 - <<'PY'
@@ -104,20 +109,21 @@ jobs:
         if: steps.apply.outputs.applied == '1'
         run: |
           set +e
-          : > .pseudo-codex/phase3.verify.log
+          : > .pseudo-codex/final.verify.log
           for command in \
             "npm run check:syntax" \
             "npm run check" \
             "python3 -m py_compile dispatcher/dispatcher.py" \
             "python3 tests/dispatcher-git.check.py" \
             "python3 tests/dispatcher-github-direct.check.py" \
+            "python3 tests/dispatcher-config-reload.check.py" \
             "python3 tests/dispatcher-parallel.check.py"
           do
-            printf '\n$ %s\n' "$command" >> .pseudo-codex/phase3.verify.log
-            sh -lc "$command" >> .pseudo-codex/phase3.verify.log 2>&1
+            printf '\n$ %s\n' "$command" >> .pseudo-codex/final.verify.log
+            sh -lc "$command" >> .pseudo-codex/final.verify.log 2>&1
             status=$?
             if [ "$status" -ne 0 ]; then
-              echo "VERIFY_STATUS=$status" >> .pseudo-codex/phase3.verify.log
+              echo "VERIFY_STATUS=$status" >> .pseudo-codex/final.verify.log
               echo "status=$status" >> "$GITHUB_OUTPUT"
               exit 0
             fi
@@ -129,8 +135,8 @@ jobs:
           git config user.name "Pseudo Codex GitHub Direct"
           git config user.email "pseudo-codex@example.invalid"
           git add -A
-          git add -f .pseudo-codex/phase3.verify.log
-          git commit -m "Verify GitHub-direct dispatcher implementation"
+          git add -f .pseudo-codex/final.verify.log
+          git commit -m "Finalize GitHub-direct execution safety and verification modes"
           git push origin HEAD:${{ github.head_ref }}
       - name: Fail when verification failed
         if: steps.apply.outputs.applied == '1' && steps.verify.outputs.status != '0'
