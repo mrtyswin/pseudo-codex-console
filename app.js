@@ -991,16 +991,34 @@ function jobActions(job) {
 
 function handoffActions(job) {
   var id = encodeURIComponent(job.id);
+  var recoveryButton = ['failed', 'blocked'].includes(job.stage)
+    ? '<button type="button" data-recover-job data-job-id="' + escapeHtml(job.id) + '">別の手をChatGPTに聞く</button>'
+    : '';
   return '<div class="handoff-actions"><button type="button" data-copy-handoff data-job-id="' +
-    escapeHtml(job.id) + '">ChatGPT用引き継ぎをコピー</button>' +
+    escapeHtml(job.id) + '">ChatGPT用引き継ぎをコピー</button>' + recoveryButton +
     '<a href="/api/jobs/' + id + '/handoff" target="_blank" rel="noopener">Markdownを表示・保存</a>' +
     '<span data-handoff-status aria-live="polite"></span></div>';
+}
+
+function recoveryInfo(job) {
+  var values = [];
+  if (job.parentJobId) {
+    values.push('自動再引き継ぎジョブ · 深度 ' + escapeHtml(job.autoHandoffDepth) +
+      ' · <a href="#job-' + escapeHtml(job.parentJobId) + '">元ジョブへ</a>');
+  }
+  if (job.continuationJobId) {
+    values.push(escapeHtml(job.autoHandoffStatus || '継続ジョブを作成済み') +
+      ' · <a href="#job-' + escapeHtml(job.continuationJobId) + '">継続ジョブへ</a>');
+  } else if (job.autoHandoffStatus) {
+    values.push(escapeHtml(job.autoHandoffStatus));
+  }
+  return values.length ? '<div class="recovery-info">' + values.join('<br>') + '</div>' : '';
 }
 
 function renderJob(job) {
   var runtime = job.workerId ? '<div class="runtime">Worker: ' + escapeHtml(job.workerId) +
     ' · PID: ' + escapeHtml(job.pid || '-') + ' · 最終heartbeat: ' + escapeHtml(formatDate(job.heartbeatAt)) + '</div>' : '';
-  return '<article class="job" data-job-id="' + escapeHtml(job.id) + '" data-updated-at="' +
+  return '<article id="job-' + escapeHtml(job.id) + '" class="job" data-job-id="' + escapeHtml(job.id) + '" data-updated-at="' +
     escapeHtml(job.updatedAt) + '"><div class="job-head"><div><h3>' + escapeHtml(job.title || '無題') +
     '</h3><p class="meta">登録: ' + escapeHtml(formatDate(job.createdAt)) + ' · ' + escapeHtml(job.project) +
     ' · ' + escapeHtml(job.id) + '</p></div>' + badges(job) + '</div>' +
@@ -1011,7 +1029,7 @@ function renderJob(job) {
     '</strong></span><span>残りターン: <strong>' + escapeHtml(job.remainingTurns) +
     '</strong></span><span>変更ファイル: <strong>' + escapeHtml((job.changedFiles || []).length) +
     '</strong></span><span>戦略パス: <strong>' + escapeHtml(job.strategyPass || 1) + '</strong></span></div>' +
-    runtime + jobActions(job) + handoffActions(job) +
+    runtime + recoveryInfo(job) + jobActions(job) + handoffActions(job) +
     '<div class="job-download"><a href="/api/jobs/' + encodeURIComponent(job.id) +
     '/transcript" download="transcript.json">このジョブのやり取りをダウンロード</a></div>' +
     detail(job.id, '指示を表示', job.instruction, false) +
@@ -1180,6 +1198,27 @@ document.addEventListener('click', async function (event) {
       handoffStatus.textContent = 'コピーに失敗しました。Markdownを表示してください';
     } finally {
       handoffButton.disabled = false;
+    }
+    return;
+  }
+
+  var recoverButton = event.target.closest && event.target.closest('button[data-recover-job]');
+  if (recoverButton) {
+    var recoverContainer = recoverButton.closest('.handoff-actions');
+    var recoverStatus = recoverContainer.querySelector('[data-handoff-status]');
+    recoverButton.disabled = true;
+    recoverStatus.textContent = '別の手を依頼中...';
+    try {
+      var recoverResponse = await fetch('/api/jobs/' + encodeURIComponent(recoverButton.dataset.jobId) + '/recover', {
+        method: 'POST', headers: {'Content-Type': 'application/json'}, body: '{}'
+      });
+      if (!recoverResponse.ok) throw new Error('recover request failed');
+      recoverStatus.textContent = '継続ジョブを登録しました';
+      await refreshJobs();
+    } catch (_error) {
+      recoverStatus.textContent = '継続ジョブの登録に失敗しました';
+    } finally {
+      recoverButton.disabled = false;
     }
     return;
   }
@@ -1658,6 +1697,22 @@ transactions: Array.isArray(source.transactions)
 : [],
 errorClass: compactText(source.errorClass, 200),
 checkpoint: compactText(source.checkpoint, 20000),
+chatConversationId: compactText(source.chatConversationId, 300),
+chatConversationUrl: compactText(source.chatConversationUrl, 2000),
+workerSessionId: compactText(source.workerSessionId, 300),
+parentJobId: compactText(source.parentJobId, 200),
+rootJobId: compactText(source.rootJobId, 200) || normalizeString(source.id),
+autoHandoffDepth: Number.isSafeInteger(source.autoHandoffDepth) && source.autoHandoffDepth >= 0
+? source.autoHandoffDepth
+: 0,
+autoHandoffCreatedAt: normalizeOptionalDate(source.autoHandoffCreatedAt),
+sourceFailureStage: compactText(source.sourceFailureStage, 100),
+sourceErrorClass: compactText(source.sourceErrorClass, 200),
+sourceCheckpointKey: compactText(source.sourceCheckpointKey, 200),
+continuationJobId: compactText(source.continuationJobId, 200),
+autoHandoffStatus: compactText(source.autoHandoffStatus, 500),
+autoHandoffKey: compactText(source.autoHandoffKey, 200),
+forceNewConversation: source.forceNewConversation === true,
 conversationTurns,
 history
 };
@@ -2043,7 +2098,12 @@ return {
 workerId: String(value.workerId || "").trim().slice(0, 200),
 sessionId: String(value.sessionId || "").trim().slice(0, 200),
 pid: boundedInteger(value.pid, 1, 2147483647, null),
-leaseSeconds: boundedInteger(value.leaseSeconds, 30, 86400, 300)
+leaseSeconds: boundedInteger(value.leaseSeconds, 30, 86400, 300),
+excludedProjects: Array.isArray(value.excludedProjects)
+? value.excludedProjects.map(String).filter(function(project) {
+return PROJECT_PATTERN.test(project);
+}).slice(0, 100)
+: []
 };
 }
 
@@ -2072,7 +2132,10 @@ leaseSeconds: boundedInteger(value.leaseSeconds, 30, 86400, 300),
  changedFiles,
  transactions,
  errorClass: String(value.errorClass || "").slice(0, 200),
- checkpoint: String(value.checkpoint || "").slice(0, 20000)
+ checkpoint: String(value.checkpoint || "").slice(0, 20000),
+ chatConversationId: String(value.chatConversationId || "").slice(0, 300),
+ chatConversationUrl: String(value.chatConversationUrl || "").slice(0, 2000),
+ workerSessionId: String(value.workerSessionId || "").slice(0, 300)
 };
 }
 
@@ -2154,6 +2217,20 @@ changedFiles: [],
 transactions: [],
 errorClass: "",
 checkpoint: "",
+chatConversationId: "",
+chatConversationUrl: "",
+workerSessionId: "",
+parentJobId: "",
+rootJobId: "",
+autoHandoffDepth: 0,
+autoHandoffCreatedAt: "",
+sourceFailureStage: "",
+sourceErrorClass: "",
+sourceCheckpointKey: "",
+continuationJobId: "",
+autoHandoffStatus: "",
+autoHandoffKey: "",
+forceNewConversation: false,
 conversationTurns: [],
 history: [
 {
@@ -2200,7 +2277,8 @@ for (let index = 0; index < jobs.length; index += 1) {
     job.status !== "queued" ||
     job.stage !== "queued" ||
     job.kind === "test" ||
-    job.isTest === true
+    job.isTest === true ||
+    worker.excludedProjects.includes(job.project)
   ) {
     continue;
   }
@@ -2264,6 +2342,9 @@ if (progress.changedFiles.length > 0) job.changedFiles = progress.changedFiles;
 if (progress.transactions.length > 0) job.transactions = progress.transactions;
 if (progress.errorClass) job.errorClass = progress.errorClass;
 if (progress.checkpoint) job.checkpoint = progress.checkpoint;
+if (progress.chatConversationId) job.chatConversationId = progress.chatConversationId;
+if (progress.chatConversationUrl) job.chatConversationUrl = progress.chatConversationUrl;
+if (progress.workerSessionId) job.workerSessionId = progress.workerSessionId;
 if (job.workerId || progress.workerId) {
 applyWorkerLease(job, {
 workerId: progress.workerId || job.workerId,
@@ -2368,6 +2449,152 @@ return job;
 });
 }
 
+function getAutoHandoffMax() {
+const parsed = Number.parseInt(
+process.env.PSEUDO_CODEX_AUTO_HANDOFF_MAX || "3",
+10
+);
+return Number.isSafeInteger(parsed) && parsed >= 0 ? parsed : 3;
+}
+
+function continuationFailureKey(job) {
+const checkpointSource = job.checkpoint || job.updatedAt || job.id;
+return crypto.createHash("sha1").update([
+job.id,
+checkpointSource,
+job.errorClass || job.status || job.stage,
+job.strategyPass || 1
+].join("\n")).digest("hex");
+}
+
+function createContinuationJob(jobs, job, reason, automatic) {
+if (
+job.isTest ||
+job.kind === "test" ||
+job.stage === "stopped" ||
+job.status === "cancelled" ||
+job.stage === "completed"
+) {
+return null;
+}
+
+const depth = Number.isSafeInteger(job.autoHandoffDepth)
+? job.autoHandoffDepth
+: 0;
+const maximum = getAutoHandoffMax();
+if (depth >= maximum) {
+job.autoHandoffStatus = "自動再引き継ぎ上限に到達";
+job.autoHandoffCreatedAt = new Date().toISOString();
+return null;
+}
+
+const key = continuationFailureKey(job);
+const existing = jobs.find(function(candidate) {
+return candidate.autoHandoffKey === key ||
+candidate.id === job.continuationJobId;
+});
+if (existing) {
+return existing;
+}
+
+const now = new Date().toISOString();
+const assignment = deriveAssignment("queued");
+const continuationId = crypto.randomUUID();
+const recoveryInstruction = [
+"このジョブは前の実装方法で行き詰まったため、新しいChatGPT会話で継続します。",
+"成功済みの変更とチェックポイントを保持し、失敗した操作を繰り返さず、別の具体的な実装方法を選んでください。",
+reason ? "継続理由: " + reason : "",
+"",
+buildChatGptHandoff(job)
+].filter(Boolean).join("\n");
+
+const continuation = normalizeJob({
+id: continuationId,
+project: job.project,
+createdAt: now,
+updatedAt: now,
+attempts: 0,
+lastError: "",
+workerLog: "",
+title: (job.title || "無題") + "（別の手で継続 " + (depth + 1) + "）",
+instruction: recoveryInstruction,
+kind: "job",
+status: "queued",
+stage: "queued",
+assignee: assignment.assignee,
+displayStatus: assignment.displayStatus,
+result: "",
+finalAnswer: "",
+executionResult: "",
+verificationResult: "",
+workerId: "",
+sessionId: "",
+pid: null,
+heartbeatAt: "",
+activityAt: now,
+leaseExpiresAt: "",
+currentTurn: 0,
+currentCommand: "",
+phase: "INSPECT",
+remainingTurns: 0,
+strategyPass: 1,
+inspectTurns: 0,
+recoveryHistory: Array.isArray(job.recoveryHistory) ? job.recoveryHistory.slice() : [],
+changedFiles: Array.isArray(job.changedFiles) ? job.changedFiles.slice() : [],
+transactions: Array.isArray(job.transactions) ? job.transactions.slice() : [],
+errorClass: "",
+checkpoint: job.checkpoint || "",
+parentJobId: job.id,
+rootJobId: job.rootJobId || job.id,
+autoHandoffDepth: depth + 1,
+autoHandoffCreatedAt: now,
+sourceFailureStage: job.stage,
+sourceErrorClass: job.errorClass || job.status || job.stage,
+sourceCheckpointKey: key,
+autoHandoffKey: key,
+forceNewConversation: true,
+conversationTurns: [],
+history: [{
+at: now,
+stage: "queued",
+assignee: assignment.assignee,
+message: automatic
+? "失敗を検知し、別の手を聞く継続ジョブを自動登録"
+: "Web GUIから別の手を聞く継続ジョブを登録"
+}]
+});
+
+jobs.unshift(continuation);
+job.continuationJobId = continuationId;
+job.autoHandoffStatus = automatic
+? "別の手を聞く継続ジョブを自動作成済み"
+: "別の手を聞く継続ジョブを作成済み";
+job.autoHandoffCreatedAt = now;
+job.autoHandoffKey = key;
+appendHistory(
+job,
+job.stage,
+job.assignee,
+job.autoHandoffStatus + " continuation=" + continuationId
+);
+return continuation;
+}
+
+function requestAlternativeJob(id) {
+return mutateJobs(function(jobs) {
+const job = jobs.find(function(candidate) {
+return candidate.id === id;
+});
+if (!job) return null;
+return createContinuationJob(
+jobs,
+job,
+job.lastError || "Web GUIから別の実装方法を要求",
+false
+);
+});
+}
+
 function updateJobResult(id, result) {
 return mutateJobs(function(jobs) {
 const job = jobs.find(function(candidate) {
@@ -2414,9 +2641,17 @@ if (
   job.phase = "BLOCKED";
   applyStage(job, "blocked", result.lastError || "自動継続を保留");
 } else {
-  applyStage(job, "queued", "再実行待ちへ戻す");
+applyStage(job, "queued", "再実行待ちへ戻す");
 }
 
+if (["failed", "blocked"].includes(job.stage)) {
+createContinuationJob(
+jobs,
+job,
+job.lastError || "最終失敗を検知",
+true
+);
+}
 return job;
 
 });
@@ -2545,16 +2780,35 @@ action === "stop" ? "停止" : "再実行",
 }
 
 function renderHandoffActions(job) {
+const recoveryButton = ["failed", "blocked"].includes(job.stage)
+? '<button type="button" data-recover-job data-job-id="' + escapeHtml(job.id) + '">別の手をChatGPTに聞く</button>'
+: "";
 return [
 '<div class="handoff-actions">',
 '<button type="button" data-copy-handoff data-job-id="', escapeHtml(job.id), '">',
 "ChatGPT用引き継ぎをコピー",
 "</button>",
+recoveryButton,
 '<a href="/api/jobs/', encodeURIComponent(job.id),
 '/handoff" target="_blank" rel="noopener">Markdownを表示・保存</a>',
 '<span data-handoff-status aria-live="polite"></span>',
 "</div>"
 ].join("");
+}
+
+function renderRecoveryInfo(job) {
+const values = [];
+if (job.parentJobId) {
+values.push('自動再引き継ぎジョブ · 深度 ' + escapeHtml(job.autoHandoffDepth) +
+' · <a href="#job-' + escapeHtml(job.parentJobId) + '">元ジョブへ</a>');
+}
+if (job.continuationJobId) {
+values.push(escapeHtml(job.autoHandoffStatus || "継続ジョブを作成済み") +
+' · <a href="#job-' + escapeHtml(job.continuationJobId) + '">継続ジョブへ</a>');
+} else if (job.autoHandoffStatus) {
+values.push(escapeHtml(job.autoHandoffStatus));
+}
+return values.length ? '<div class="recovery-info">' + values.join('<br>') + '</div>' : "";
 }
 
 function renderRuntime(job) {
@@ -2572,7 +2826,7 @@ job.currentTurn ? ' · ChatGPT turn: ' + escapeHtml(job.currentTurn) : "",
 
 function renderJobCard(job) {
 return [
-'<article class="job" data-job-id="', escapeHtml(job.id), '" data-updated-at="', escapeHtml(job.updatedAt), '">',
+'<article id="job-', escapeHtml(job.id), '" class="job" data-job-id="', escapeHtml(job.id), '" data-updated-at="', escapeHtml(job.updatedAt), '">',
 '<div class="job-head">',
 "<div>",
 "<h3>",
@@ -2606,6 +2860,7 @@ escapeHtml(formatDateForDisplay(job.updatedAt)),
 "</strong></span><span>戦略パス: <strong>", escapeHtml(job.strategyPass),
 "</strong></span></div>",
 renderRuntime(job),
+renderRecoveryInfo(job),
 renderJobActions(job),
 renderHandoffActions(job),
 ['<div class="job-download"><a href="/api/jobs/', encodeURIComponent(job.id), '/transcript" download="transcript.json">このジョブのやり取りをダウンロード</a></div>'].join(""),
@@ -2693,6 +2948,7 @@ return [
 ".stage-blocked{background:#fff0bf;color:#765600}",
 ".facts{display:flex;gap:18px;flex-wrap:wrap;margin:10px 0;color:#4a5568;font-size:.9rem}",
 ".runtime{font-size:.82rem;color:#687386;overflow-wrap:anywhere}",
+".recovery-info{margin-top:10px;padding:9px 11px;border-left:4px solid #765600;background:#fff8df;color:#604800;font-size:.88rem}.recovery-info a{font-weight:700;color:#604800}",
 ".job-actions{display:flex;gap:8px;margin-top:10px}.job-actions button{margin:0;padding:7px 12px;background:#5b6472}.job-actions button:disabled{opacity:.55;cursor:wait}",
 ".handoff-actions{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:10px}.handoff-actions button{margin:0;padding:8px 12px;background:#176544}.handoff-actions button:disabled{opacity:.55;cursor:wait}.handoff-actions a{font-weight:700;color:#176544}.handoff-actions span{font-size:.82rem;font-weight:700;color:#176544}",
 "details{margin-top:10px;border:1px solid #e3e7ee;border-radius:8px;padding:9px 11px}",
@@ -2931,7 +3187,7 @@ let worker;
 try {
 worker = parseWorkerRequest(request, await readBody(request));
 } catch (_error) {
-worker = { workerId: "", sessionId: "", pid: null, leaseSeconds: 300 };
+worker = { workerId: "", sessionId: "", pid: null, leaseSeconds: 300, excludedProjects: [] };
 }
 const job = await claimOldestJob(worker);
 
@@ -2984,6 +3240,17 @@ if (!job) {
 sendJson(response, 404, { error: "job not found" });
 } else {
 sendJson(response, 200, job);
+}
+return;
+}
+
+const recoverJobId = parseJobPath(url.pathname, "recover");
+if (request.method === "POST" && recoverJobId) {
+const continuation = await requestAlternativeJob(recoverJobId);
+if (!continuation) {
+sendJson(response, 409, { error: "job cannot create a continuation" });
+} else {
+sendJson(response, 201, continuation);
 }
 return;
 }

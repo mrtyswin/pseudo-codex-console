@@ -8,8 +8,8 @@
     "start": "node app.js",
     "check": "npm run check:console && npm run check:agent",
     "check:console": "node check.js",
-    "check:agent": "node tests/agent-no-sha.check.js && node tests/agent-controller.check.js",
-    "check:syntax": "node --check app.js && node --check agent/agent.js && node --check agent/chatgpt.js && node --check agent/mcp-server.js"
+    "check:agent": "node tests/agent-no-sha.check.js && node tests/agent-controller.check.js && node tests/chatgpt-parallel.check.js",
+    "check:syntax": "node --check app.js && node --check agent/agent.js && node --check agent/chatgpt.js && node --check agent/fake-browser-client.js && node --check agent/mcp-server.js"
   },
   "engines": {
     "node": ">=20"

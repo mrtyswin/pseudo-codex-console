@@ -20,9 +20,6 @@
  *   node chatgpt.js --stop                                # kill daemon
  */
 
-const { addExtra }        = require('puppeteer-extra');
-const puppeteerCore       = require('puppeteer-core');
-const StealthPlugin       = require('puppeteer-extra-plugin-stealth');
 const path                = require('path');
 const os                  = require('os');
 const fs                  = require('fs');
@@ -30,8 +27,21 @@ const http                = require('http');
 const readline            = require('readline');
 const { execSync, spawn } = require('child_process');
 
-const puppeteer = addExtra(puppeteerCore);
-puppeteer.use(StealthPlugin());
+const browserClientPath = process.env.PSEUDO_CODEX_BROWSER_CLIENT || '';
+const browserClient = browserClientPath
+  ? require(path.resolve(browserClientPath))
+  : null;
+let puppeteer = null;
+
+function getPuppeteer() {
+  if (puppeteer) return puppeteer;
+  const { addExtra } = require('puppeteer-extra');
+  const puppeteerCore = require('puppeteer-core');
+  const StealthPlugin = require('puppeteer-extra-plugin-stealth');
+  puppeteer = addExtra(puppeteerCore);
+  puppeteer.use(StealthPlugin());
+  return puppeteer;
+}
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -181,7 +191,10 @@ async function uploadFileToChatGPT(page, uploadPath, log) {
 }
 
 function launchBrowser() {
-  return puppeteer.launch({
+  if (browserClient && typeof browserClient.launchBrowser === 'function') {
+    return browserClient.launchBrowser();
+  }
+  return getPuppeteer().launch({
     executablePath: CHROME_PATH,
     userDataDir: PROFILE_DIR,
     headless: false,
@@ -368,6 +381,28 @@ async function waitWithRecovery(page, fullPrompt, log, beforeState) {
   }
 }
 
+async function navigateWithRetry(page, targetUrl, log) {
+  const safeUrl = String(targetUrl || CHATGPT_URL).startsWith('https://chatgpt.com')
+    ? String(targetUrl || CHATGPT_URL)
+    : CHATGPT_URL;
+  try {
+    await page.goto(safeUrl, { waitUntil: 'networkidle2', timeout: 30_000 });
+  } catch (initialError) {
+    log(`Navigation failed once for ${safeUrl}: ${initialError.message}; retrying once.`);
+    await page.reload({ waitUntil: 'domcontentloaded', timeout: 30_000 }).catch(() => {});
+    await page.goto(safeUrl, { waitUntil: 'networkidle2', timeout: 30_000 });
+  }
+}
+
+function conversationDetails(url) {
+  const value = String(url || '');
+  const match = value.match(/\/c\/([^/?#]+)/);
+  return {
+    conversationUrl: value,
+    conversationId: match ? match[1] : '',
+  };
+}
+
 async function extractLastAssistantMessage(page) {
   return page.evaluate(() => {
     const msgs = document.querySelectorAll('[data-message-author-role="assistant"]');
@@ -386,34 +421,40 @@ async function startDaemonProcess() {
 
   log('Daemon starting...');
 
-  let browser, page;
+  let browser;
+  let defaultPage;
+  const sessions = new Map();
   try {
     browser = await launchBrowser();
-    page    = await browser.newPage();
+    defaultPage = await browser.newPage();
 
     const initUrl = fs.existsSync(SESSION_FILE)
       ? fs.readFileSync(SESSION_FILE, 'utf8').trim()
       : CHATGPT_URL;
 
     log(`Navigating to ${initUrl}`);
-    await page.goto(
-      initUrl.startsWith('https://chatgpt.com') ? initUrl : CHATGPT_URL,
-      { waitUntil: 'networkidle2', timeout: 30_000 }
-    );
+    await navigateWithRetry(defaultPage, initUrl, log);
 
-    const loggedOut = await page.evaluate(() => {
-      const hasLoginBtn = [...document.querySelectorAll('button, a')]
-        .some(el => ['Log in', 'Sign in'].includes(el.textContent.trim()));
-      const hasInput = !!document.querySelector('#prompt-textarea');
-      return hasLoginBtn && !hasInput;
-    });
+    if (!browserClient) {
+      const loggedOut = await defaultPage.evaluate(() => {
+        const hasLoginBtn = [...document.querySelectorAll('button, a')]
+          .some(el => ['Log in', 'Sign in'].includes(el.textContent.trim()));
+        const hasInput = !!document.querySelector('#prompt-textarea');
+        return hasLoginBtn && !hasInput;
+      });
 
-    if (loggedOut) {
-      log('ERROR: Not logged in. Run: node chatgpt.js --login');
-      await browser.close();
-      process.exit(1);
+      if (loggedOut) {
+        log('ERROR: Not logged in. Run: node chatgpt.js --login');
+        await browser.close();
+        process.exit(1);
+      }
     }
 
+    sessions.set('default', Promise.resolve({
+      page: defaultPage,
+      tail: Promise.resolve(),
+      conversationUrl: initUrl,
+    }));
     log('Browser ready and logged in.');
   } catch (err) {
     log(`Startup error: ${err.message}`);
@@ -421,8 +462,23 @@ async function startDaemonProcess() {
     process.exit(1);
   }
 
-  // Serialize requests — ChatGPT is one-at-a-time.
-  let busy = false;
+  const getSession = async (key, activeSessionFile) => {
+    if (!sessions.has(key)) {
+      sessions.set(key, (async () => {
+        const page = await browser.newPage();
+        const initialUrl = readSessionUrl(activeSessionFile);
+        await navigateWithRetry(page, initialUrl, log);
+        return { page, tail: Promise.resolve(), conversationUrl: initialUrl };
+      })());
+    }
+    return sessions.get(key);
+  };
+
+  const enqueue = (state, task) => {
+    const current = state.tail.catch(() => {}).then(task);
+    state.tail = current.catch(() => {});
+    return current;
+  };
 
   const server = http.createServer(async (req, res) => {
     const send = (status, obj) => {
@@ -431,7 +487,7 @@ async function startDaemonProcess() {
     };
 
     if (req.method === 'GET' && req.url === '/status') {
-      return send(200, { ok: true, pid: process.pid });
+      return send(200, { ok: true, pid: process.pid, activeSessions: sessions.size });
     }
 
     if (req.method === 'POST' && req.url === '/stop') {
@@ -444,76 +500,101 @@ async function startDaemonProcess() {
     }
 
     if (req.method === 'POST' && req.url === '/ask') {
-      if (busy) return send(503, { ok: false, error: 'Daemon busy — try again in a moment.' });
-      busy = true;
-
       let body = '';
       req.on('data', chunk => (body += chunk));
       req.on('end', async () => {
-        const { fullPrompt, codeOnly, newChat, uploadPath, sessionFile } = JSON.parse(body);
-        const activeSessionFile = sessionFile || SESSION_FILE;
-        const sessionUrl = readSessionUrl(activeSessionFile);
-        log(`ask: newChat=${newChat} session=${activeSessionFile !== SESSION_FILE ? 'job' : 'default'} codeOnly=${codeOnly} upload=${uploadPath||'none'} len=${fullPrompt.length}`);
-
         try {
-          const currentUrl = page.url();
+          const payload = JSON.parse(body || '{}');
+          const {
+            fullPrompt,
+            codeOnly,
+            newChat,
+            uploadPath,
+            sessionFile,
+            sessionKey,
+          } = payload;
+          const activeSessionFile = sessionFile || SESSION_FILE;
+          const key = String(
+            sessionKey || (activeSessionFile === SESSION_FILE ? 'default' : activeSessionFile)
+          ).slice(0, 500);
+          const state = await getSession(key, activeSessionFile);
+          const result = await enqueue(state, async () => {
+            const page = state.page;
+            const sessionUrl = state.conversationUrl || readSessionUrl(activeSessionFile);
+            log(`ask: sessionKey=${key} newChat=${newChat} codeOnly=${codeOnly} upload=${uploadPath || 'none'} len=${String(fullPrompt || '').length}`);
 
-          if (newChat) {
-            log('Starting new chat...');
-            await page.goto(
-              activeSessionFile === SESSION_FILE ? CHATGPT_URL : projectHomeUrl(),
-              { waitUntil: 'networkidle2', timeout: 30_000 }
-            );
-          } else if (currentUrl !== sessionUrl) {
-            // Each queued job owns its own conversation, even though the browser is serial.
-            log(`Switching tab to ${sessionUrl}`);
-            await page.goto(sessionUrl, { waitUntil: 'networkidle2', timeout: 30_000 });
-          }
-          // else: already on the right chat page, skip navigation entirely
+            const currentUrl = page.url();
+            if (newChat) {
+              log(`Starting new chat for sessionKey=${key}`);
+              await navigateWithRetry(
+                page,
+                activeSessionFile === SESSION_FILE ? CHATGPT_URL : projectHomeUrl(),
+                log
+              );
+            } else if (currentUrl !== sessionUrl) {
+              log(`Switching session ${key} to ${sessionUrl}`);
+              await navigateWithRetry(page, sessionUrl, log);
+            }
 
-          if (uploadPath) await uploadFileToChatGPT(page, uploadPath, log);
+            let raw;
+            if (browserClient && typeof browserClient.send === 'function') {
+              const adapterResult = await browserClient.send({
+                page,
+                fullPrompt,
+                codeOnly,
+                newChat,
+                uploadPath,
+                sessionKey: key,
+                sessionFile: activeSessionFile,
+                log,
+              });
+              raw = adapterResult && typeof adapterResult === 'object'
+                ? adapterResult.response
+                : adapterResult;
+            } else {
+              if (uploadPath) await uploadFileToChatGPT(page, uploadPath, log);
+              if (uploadPath) {
+                log('Waiting for send button to become enabled (file upload in progress)...');
+                await page.waitForFunction(
+                  () => {
+                    const btn = document.querySelector('button[data-testid="send-button"]');
+                    return btn && !btn.disabled;
+                  },
+                  { timeout: 60_000 }
+                );
+                log('Send button is now enabled.');
+              }
 
-          // If a file was uploaded, wait until the send button is enabled.
-          // ChatGPT uploads the file to its servers in the background; the send
-          // button stays disabled until that upload finishes.  Clicking a disabled
-          // button does nothing, which is what caused the previous silent failures.
-          if (uploadPath) {
-            log('Waiting for send button to become enabled (file upload in progress)...');
-            await page.waitForFunction(
-              () => {
-                const btn = document.querySelector('button[data-testid="send-button"]');
-                return btn && !btn.disabled;
-              },
-              { timeout: 60_000 }
-            );
-            log('Send button is now enabled.');
-          }
+              const beforeState = await submitPrompt(page, fullPrompt, log);
+              log('Prompt sent, waiting for response...');
+              await waitWithRecovery(page, fullPrompt, log, beforeState);
+              raw = await extractLastAssistantMessage(page);
+            }
 
-          // Snapshot assistant count BEFORE submitting so waitForStreamingDone
-          // can reliably detect the new response even if ChatGPT replies instantly.
-          const beforeState = await submitPrompt(page, fullPrompt, log);
+            const finalUrl = page.url();
+            state.conversationUrl = finalUrl;
+            if (conversationDetails(finalUrl).conversationId) {
+              fs.mkdirSync(path.dirname(activeSessionFile), { recursive: true });
+              fs.writeFileSync(activeSessionFile, finalUrl, { encoding: 'utf8', mode: 0o600 });
+              fs.chmodSync(activeSessionFile, 0o600);
+            }
 
-          log('Prompt sent, waiting for response...');
-          await waitWithRecovery(page, fullPrompt, log, beforeState);
-
-          const finalUrl = page.url();
-          if (new URL(finalUrl).pathname.includes('/c/')) {
-            fs.mkdirSync(path.dirname(activeSessionFile), { recursive: true });
-            fs.writeFileSync(activeSessionFile, finalUrl, { encoding: 'utf8', mode: 0o600 });
-            fs.chmodSync(activeSessionFile, 0o600);
-          }
-
-          const raw = await extractLastAssistantMessage(page);
-          if (!raw) throw new Error('Could not extract response from page');
-
-          const output = codeOnly ? extractCodeBlocks(raw) : raw;
-          log(`Done: ${output.length} chars`);
-          send(200, { ok: true, response: output });
+            if (!raw) throw new Error('Could not extract response from page');
+            const output = codeOnly ? extractCodeBlocks(raw) : raw;
+            const details = conversationDetails(finalUrl);
+            log(`Done: sessionKey=${key} conversation=${details.conversationId || 'none'} chars=${output.length}`);
+            return {
+              ok: true,
+              response: output,
+              conversationId: details.conversationId,
+              conversationUrl: details.conversationUrl,
+              workerSessionId: key,
+            };
+          });
+          send(200, result);
         } catch (err) {
           log(`Error: ${err.message}`);
           send(500, { ok: false, error: err.message });
-        } finally {
-          busy = false;
         }
       });
       return;
@@ -534,15 +615,14 @@ async function startDaemonProcess() {
     log('Daemon ready.');
   });
 
-  const shutdown = async signal => {
-    log(`${signal} received, shutting down`);
+  const shutdown = async signalName => {
+    log(`${signalName} received, shutting down`);
     if (fs.existsSync(DAEMON_FILE)) fs.unlinkSync(DAEMON_FILE);
     await browser.close().catch(() => {});
     process.exit(0);
   };
   process.on('SIGTERM', () => shutdown('SIGTERM'));
-  process.on('SIGINT',  () => shutdown('SIGINT'));
-  // never returns — stays alive as the server
+  process.on('SIGINT', () => shutdown('SIGINT'));
 }
 
 // ─── Client helpers ───────────────────────────────────────────────────────────
@@ -644,7 +724,7 @@ function parseArgs(argv) {
   const opts = {
     login: false, codeOnly: false, file: null, upload: null, save: null,
     git: false, context: null, newChat: false, start: false, stop: false, status: false,
-    daemonInternal: false, cwd: null, sessionFile: null, promptFile: null, prompt: [],
+    daemonInternal: false, cwd: null, sessionFile: null, sessionKey: null, promptFile: null, prompt: [],
   };
   for (let i = 0; i < args.length; i++) {
     switch (args[i]) {
@@ -662,6 +742,7 @@ function parseArgs(argv) {
       case '--context':         opts.context = args[++i];    break;
       case '--cwd':             opts.cwd     = args[++i];    break;
       case '--session-file':    opts.sessionFile = args[++i]; break;
+      case '--session-key':     opts.sessionKey = args[++i];  break;
       case '--prompt-file':     opts.promptFile = args[++i];  break;
       default:                  opts.prompt.push(args[i]);
     }
@@ -745,6 +826,7 @@ Usage:
     const result = await httpPost(port, '/ask', {
       fullPrompt, codeOnly: opts.codeOnly, newChat: opts.newChat,
       uploadPath: opts.upload || null, sessionFile: opts.sessionFile,
+      sessionKey: opts.sessionKey,
     });
     if (!result.ok) throw new Error(result.error || 'Daemon returned an error');
     console.log('\n--- RESPONSE ---');

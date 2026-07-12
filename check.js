@@ -49,7 +49,7 @@ body: JSON.stringify(value)
 }
 
 function extractJobCard(page, jobId) {
-const marker = '<article class="job" data-job-id="' + jobId + '"';
+const marker = 'class="job" data-job-id="' + jobId + '"';
 const start = page.indexOf(marker);
 assert.notEqual(start, -1, "job card must exist");
 const end = page.indexOf("</article>", start);
@@ -70,11 +70,12 @@ kind: kind || "job"
 });
 }
 
-async function claim() {
+async function claim(excludedProjects) {
 return postJson("/api/jobs/claim", {
 workerId: "check-worker",
 sessionId: crypto.randomUUID(),
-leaseSeconds: 120
+leaseSeconds: 120,
+excludedProjects: excludedProjects || []
 });
 }
 
@@ -97,11 +98,16 @@ assert.ok(completedClaimed.leaseExpiresAt);
 const verifying = await postJson("/api/jobs/" + completedCreated.id + "/progress", {
 stage: "verifying",
 message: "結果を検証 turn=3",
-currentCommand: "node --check app.js"
+currentCommand: "node --check app.js",
+chatConversationId: "conversation-check",
+chatConversationUrl: "https://chatgpt.com/g/g-test/project/c/conversation-check",
+workerSessionId: completedCreated.id
 });
 assert.equal(verifying.assignee, "Ubuntu");
 assert.equal(verifying.currentTurn, 3);
 assert.equal(verifying.currentCommand, "node --check app.js");
+assert.equal(verifying.chatConversationId, "conversation-check");
+assert.equal(verifying.workerSessionId, completedCreated.id);
 
 const firstTurn = await postJson(
 "/api/jobs/" + completedCreated.id + "/turn",
@@ -174,6 +180,27 @@ verificationResult: ""
 });
 assert.equal(failed.stage, "failed");
 assert.equal(failed.assignee, "失敗");
+assert.ok(failed.continuationJobId, "failed job must create one continuation");
+const continuation = await requestJson("/api/jobs/" + failed.continuationJobId, { method: "GET" });
+assert.equal(continuation.parentJobId, failedCreated.id);
+assert.equal(continuation.rootJobId, failedCreated.id);
+assert.equal(continuation.autoHandoffDepth, 1);
+assert.equal(continuation.forceNewConversation, true);
+assert.ok(continuation.instruction.includes("# Pseudo Codex job handoff for ChatGPT"));
+const duplicateFailure = await postJson("/api/jobs/" + failedCreated.id + "/result", {
+status: "failed", lastError: "DISPLAY_TEST_FAILURE", workerLog: "",
+finalAnswer: "", executionResult: "", verificationResult: ""
+});
+assert.equal(duplicateFailure.continuationJobId, failed.continuationJobId);
+const manualContinuation = await postJson("/api/jobs/" + failedCreated.id + "/recover", {});
+assert.equal(manualContinuation.id, failed.continuationJobId);
+assert.equal((await claim()).id, continuation.id);
+const continuationFailed = await postJson("/api/jobs/" + continuation.id + "/result", {
+status: "failed", lastError: "CONTINUATION_FAILURE", workerLog: "",
+finalAnswer: "", executionResult: "", verificationResult: ""
+});
+assert.equal(continuationFailed.autoHandoffStatus, "自動再引き継ぎ上限に到達");
+assert.equal(continuationFailed.continuationJobId, "");
 
 const stoppedCreated = await createJob("Stopped display test " + token);
 assert.equal((await claim()).id, stoppedCreated.id);
@@ -199,6 +226,11 @@ assert.equal(resumed.stage, "queued");
 assert.equal((await claim()).id, stoppedCreated.id);
 await postJson("/api/jobs/" + stoppedCreated.id + "/stop", { reason: "test cleanup" });
 
+const excludedCreated = await createJob("Excluded project test " + token);
+const excludedClaim = await claim(["request-console"]);
+assert.equal(excludedClaim.statusCode, 204, "active project must be skipped by another worker");
+await postJson("/api/jobs/" + excludedCreated.id + "/stop", { reason: "test cleanup" });
+
 const noClaim = await claim();
 assert.equal(noClaim.statusCode, 204, "test-only job must remain unclaimed");
 
@@ -213,16 +245,22 @@ new Function(clientScript);
 const completedCard = extractJobCard(page, completedCreated.id);
 const failedCard = extractJobCard(page, failedCreated.id);
 const stoppedCard = extractJobCard(page, stoppedCreated.id);
+const continuationCard = extractJobCard(page, continuation.id);
 assert.equal(countBadges(completedCard), 1);
 assert.match(completedCard, /stage-completed[^>]*>完了<\/span>/);
 assert.equal(countBadges(failedCard), 1);
 assert.match(failedCard, /stage-failed[^>]*>失敗<\/span>/);
 assert.equal(countBadges(stoppedCard), 1);
 assert.match(stoppedCard, /stage-stopped[^>]*>停止<\/span>/);
+assert.ok(failedCard.includes("data-recover-job"));
+assert.ok(failedCard.includes("継続ジョブへ"));
+assert.ok(continuationCard.includes("元ジョブへ"));
 assert.ok(page.includes('<script src="/client.js"></script>'));
 assert.ok(clientScript.includes("fetch('/api/jobs'"));
 assert.ok(clientScript.includes("var detailStates = new Map()"));
 assert.ok(clientScript.includes("button[data-job-action]"));
+assert.ok(clientScript.includes("button[data-recover-job]"));
+assert.ok(clientScript.includes("/recover"));
 assert.ok(clientScript.includes("function scrollHistoryToBottom(detailsNode, state)"));
 assert.ok(clientScript.includes("state.autoScrolling = true;"));
 assert.ok(clientScript.includes("if (existing) restoreCard(existing);"));
@@ -272,7 +310,7 @@ assert.ok(handoff.includes("最終回答テスト"));
 assert.ok(handoff.includes("===RUN: node --check app.js==="));
 
 const listed = await requestJson("/api/jobs", { method: "GET" });
-assert.equal(listed.jobs.length, 4);
+assert.equal(listed.jobs.length, 6);
 assert.equal(listed.jobs.find(function(job) { return job.id === testOnly.id; }).kind, "test");
 console.log("REQUEST_CONSOLE_ISOLATED_REGRESSION_OK " + token);
 }
@@ -284,7 +322,11 @@ const port = 20000 + crypto.randomInt(20000);
 baseUrl = "http://127.0.0.1:" + port;
 const appPath = process.env.APP_PATH || path.join(__dirname, "app.js");
 const child = childProcess.spawn(process.execPath, [appPath], {
-env: Object.assign({}, process.env, { PORT: String(port), DATA_PATH: dataPath }),
+env: Object.assign({}, process.env, {
+PORT: String(port),
+DATA_PATH: dataPath,
+PSEUDO_CODEX_AUTO_HANDOFF_MAX: "1"
+}),
 stdio: ["ignore", "pipe", "pipe"]
 });
 let serviceOutput = "";
