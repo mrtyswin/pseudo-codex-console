@@ -93,20 +93,38 @@ jobs:
             changed=1
           fi
           echo "applied=$changed" >> "$GITHUB_OUTPUT"
-      - name: Verify
+      - name: Verify and record
+        id: verify
         if: steps.apply.outputs.applied == '1'
         run: |
-          npm run check:syntax
-          npm run check
-          python3 -m py_compile dispatcher/dispatcher.py
-          python3 tests/dispatcher-git.check.py
-          python3 tests/dispatcher-github-direct.check.py
-          python3 tests/dispatcher-parallel.check.py
-      - name: Commit generated changes
+          set +e
+          : > .pseudo-codex/phase3.verify.log
+          for command in \
+            "npm run check:syntax" \
+            "npm run check" \
+            "python3 -m py_compile dispatcher/dispatcher.py" \
+            "python3 tests/dispatcher-git.check.py" \
+            "python3 tests/dispatcher-github-direct.check.py" \
+            "python3 tests/dispatcher-parallel.check.py"
+          do
+            printf '\n$ %s\n' "$command" >> .pseudo-codex/phase3.verify.log
+            sh -lc "$command" >> .pseudo-codex/phase3.verify.log 2>&1
+            status=$?
+            if [ "$status" -ne 0 ]; then
+              echo "VERIFY_STATUS=$status" >> .pseudo-codex/phase3.verify.log
+              echo "status=$status" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          done
+          echo "status=0" >> "$GITHUB_OUTPUT"
+      - name: Commit generated changes and verification log
         if: steps.apply.outputs.applied == '1'
         run: |
           git config user.name "Pseudo Codex GitHub Direct"
           git config user.email "pseudo-codex@example.invalid"
           git add -A
-          git commit -m "Implement GitHub-direct dispatcher and dynamic project configuration"
+          git commit -m "Implement GitHub-direct dispatcher and record verification"
           git push origin HEAD:${{ github.head_ref }}
+      - name: Fail when verification failed
+        if: steps.apply.outputs.applied == '1' && steps.verify.outputs.status != '0'
+        run: exit 1
