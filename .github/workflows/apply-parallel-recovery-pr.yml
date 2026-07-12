@@ -58,16 +58,25 @@ jobs:
           )
           if marker_index is None:
               raise SystemExit('agent session assignment marker not found')
-          patched = 0
-          for i in range(max(0, marker_index - 12), marker_index):
-              if lines[i].startswith("    '''  console.log(`"):
-                  lines[i] = "    r" + lines[i].lstrip()
-                  patched += 1
-              elif lines[i].startswith("    '''  if (!args.sessionKey"):
-                  lines[i] = "    r" + lines[i].lstrip()
-                  patched += 1
-          if patched != 2:
-              raise SystemExit(f'agent session raw-string patch expected 2 lines, found {patched}')
+          start = marker_index
+          while start >= 0 and lines[start].strip() != 'agent = replace_once(':
+              start -= 1
+          end = marker_index
+          while end < len(lines) and lines[end].strip() != ')':
+              end += 1
+          if start < 0 or end >= len(lines):
+              raise SystemExit('agent session assignment block bounds not found')
+          replacement = [
+              'agent = replace_once(',
+              '    agent,',
+              "    '''  if (!args.task) {''',",
+              "    '''  if (!args.sessionKey && args.jobId) args.sessionKey = args.jobId;",
+              '',
+              "  if (!args.task) {''',",
+              '    "agent session key assignment",',
+              ')',
+          ]
+          lines[start:end + 1] = replacement
           script.write_text('\n'.join(lines) + '\n', encoding='utf-8')
           PY
           python3 scripts/apply-parallel-recovery-decoded.py >> /tmp/apply-parallel.log 2>&1
