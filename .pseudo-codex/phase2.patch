@@ -1,5 +1,5 @@
 diff --git a/agent/agent.js b/agent/agent.js
-index 4749d0d..0000000 100755
+index 4749d0d..0000000 100644
 --- a/agent/agent.js
 +++ b/agent/agent.js
 @@ -44,6 +44,9 @@ const MAX_INSPECT_TURNS = Number.parseInt(process.env.PSEUDO_CODEX_MAX_INSPECT_TU
@@ -377,3 +377,4 @@ index 0000000..0000000
 +assert.match(prompt, /Required working branch: chatgpt-job\/example/);
 +
 +console.log("AGENT_GITHUB_DIRECT_PROTOCOL_OK");
+ 
