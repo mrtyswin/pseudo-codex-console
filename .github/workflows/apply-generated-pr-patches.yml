@@ -79,7 +79,7 @@ jobs:
             apply_method='git'
             if ! git apply --check --recount .pseudo-codex/phase2.patch 2>.pseudo-codex/git-apply.error; then
               apply_method='patch'
-              if ! patch --dry-run --batch --forward --fuzz=3 -p1 < .pseudo-codex/phase2.patch 2>.pseudo-codex/patch.error; then
+              if ! patch --dry-run --batch --forward --fuzz=3 -p1 < .pseudo-codex/phase2.patch >.pseudo-codex/patch.error 2>&1; then
                 cat .pseudo-codex/git-apply.error .pseudo-codex/patch.error > .pseudo-codex/phase2.error
                 git config user.name "Pseudo Codex GitHub Direct"
                 git config user.email "pseudo-codex@example.invalid"
