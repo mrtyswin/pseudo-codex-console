@@ -23,19 +23,17 @@ jobs:
           if [ -f .pseudo-codex/phase2.patch ]; then
             python3 - <<'PY'
           from pathlib import Path
+          import re
+
           path = Path('.pseudo-codex/phase2.patch')
-          lines = path.read_text(encoding='utf-8').replace('\r\n', '\n').split('\n')
-          output = []
+          source = path.read_text(encoding='utf-8').replace('\r\n', '\n').split('\n')
+          normalized = []
           in_hunk = False
-          for line in lines:
+          for line in source:
               if line.startswith('index 4749d0d..0000000 100755'):
                   line = 'index 4749d0d..0000000 100644'
               if 'const BROWSER_SERVICE = os.environ.get' in line:
                   line = ' const CHATGPT_REQUEST_TIMEOUT_MS = Number.parseInt('
-              if line == '@@ -10,7 +10,7 @@':
-                  line = '@@ -10,6 +10,6 @@'
-              if line == '@@ -0,0 +1,75 @@':
-                  line = '@@ -0,0 +1,66 @@'
               if line.startswith('@@'):
                   in_hunk = True
               elif line.startswith(('diff --git ', '--- ', '+++ ', 'index ')):
@@ -45,9 +43,37 @@ jobs:
                       line = ' '
                   elif line[0] not in ' +-\\':
                       line = ' ' + line
-              output.append(line)
-          while output and output[-1] == ' ':
-              output.pop()
+              normalized.append(line)
+          while normalized and normalized[-1] == ' ':
+              normalized.pop()
+
+          output = normalized[:]
+          indexes = [i for i, line in enumerate(output) if line.startswith('@@ ')]
+          for position, start in enumerate(indexes):
+              end = indexes[position + 1] if position + 1 < len(indexes) else len(output)
+              for candidate in range(start + 1, end):
+                  if output[candidate].startswith('diff --git '):
+                      end = candidate
+                      break
+              match = re.match(r'@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@(.*)', output[start])
+              if not match:
+                  continue
+              old_count = 0
+              new_count = 0
+              for line in output[start + 1:end]:
+                  if line.startswith('\\'):
+                      continue
+                  if line.startswith('-'):
+                      old_count += 1
+                  elif line.startswith('+'):
+                      new_count += 1
+                  else:
+                      old_count += 1
+                      new_count += 1
+              output[start] = (
+                  f'@@ -{match.group(1)},{old_count} +{match.group(2)},{new_count} @@'
+                  f'{match.group(3)}'
+              )
           path.write_text('\n'.join(output) + '\n', encoding='utf-8')
           PY
             apply_method='git'
