@@ -17,29 +17,35 @@ jobs:
           ref: ${{ github.head_ref }}
           fetch-depth: 0
       - name: Apply pending generated patches
+        id: apply
         run: |
           changed=0
           if [ -f .pseudo-codex/phase2.patch ]; then
             sed -i 's#^ const BROWSER_SERVICE = os.environ.get.*# const CHATGPT_REQUEST_TIMEOUT_MS = Number.parseInt(#' .pseudo-codex/phase2.patch
-            git apply --check --recount .pseudo-codex/phase2.patch
+            if ! git apply --check --recount .pseudo-codex/phase2.patch 2>.pseudo-codex/phase2.error; then
+              git config user.name "Pseudo Codex GitHub Direct"
+              git config user.email "pseudo-codex@example.invalid"
+              git add .pseudo-codex/phase2.error
+              git commit -m "Record GitHub-direct patch failure"
+              git push origin HEAD:${{ github.head_ref }}
+              echo 'applied=false' >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            rm -f .pseudo-codex/phase2.error
             git apply --recount .pseudo-codex/phase2.patch
             rm .pseudo-codex/phase2.patch
             rm -f .pseudo-codex/phase2.trigger .github/workflows/apply-github-direct-agent.yml
             changed=1
           fi
-          if [ "$changed" -eq 0 ]; then
-            echo 'No pending generated patch.'
-            exit 0
-          fi
+          echo "applied=$changed" >> "$GITHUB_OUTPUT"
       - name: Verify
+        if: steps.apply.outputs.applied == '1'
         run: |
           npm run check:syntax
           npm run check
       - name: Commit generated changes
+        if: steps.apply.outputs.applied == '1'
         run: |
-          if git diff --quiet && git diff --cached --quiet; then
-            exit 0
-          fi
           git config user.name "Pseudo Codex GitHub Direct"
           git config user.email "pseudo-codex@example.invalid"
           git add -A
