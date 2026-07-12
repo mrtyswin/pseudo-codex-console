@@ -30,6 +30,8 @@ jobs:
           for line in lines:
               if line.startswith('index 4749d0d..0000000 100755'):
                   line = 'index 4749d0d..0000000 100644'
+              if line == '@@ -10,7 +10,7 @@':
+                  line = '@@ -10,6 +10,6 @@'
               if line.startswith('@@'):
                   in_hunk = True
               elif line.startswith(('diff --git ', '--- ', '+++ ', 'index ')):
