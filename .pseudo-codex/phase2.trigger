@@ -1,1 +1,1 @@
-trigger-pr-applicator
+trigger-error-capture
