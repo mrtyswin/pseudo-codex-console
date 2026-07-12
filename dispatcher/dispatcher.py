@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+from concurrent.futures import Future, ThreadPoolExecutor
 from datetime import datetime, timezone
 import json
 import logging
@@ -46,6 +47,7 @@ PROJECT_PATTERN = re.compile(r"^[a-z0-9][a-z0-9-]{0,63}$")
 COMPLETE_MARKER = "===TASK_COMPLETE==="
 BROWSER_SERVICE = os.environ.get("PSEUDO_CODEX_BROWSER_SERVICE", "chatgpt-browser-agent.service")
 WORKER_ID = os.environ.get("PSEUDO_CODEX_WORKER_ID", f"{socket.gethostname()}-{os.getpid()}")
+MAX_WORKERS = max(1, int(os.environ.get("PSEUDO_CODEX_MAX_WORKERS", "3")))
 
 
 def load_project_configs() -> dict[str, dict[str, Any]]:
@@ -486,6 +488,10 @@ def run_job(job: dict[str, Any]) -> None:
         update_result(job_id, "needs_human", str(exc), "Dispatcher rejected the project path.")
         return
 
+    session_path = job_session_path(job_id)
+    if job.get("forceNewConversation") and session_path.exists():
+        session_path.unlink()
+
     command = [
         AGENT,
         "run",
@@ -495,7 +501,9 @@ def run_job(job: dict[str, Any]) -> None:
         "--console-url",
         CONSOLE_URL,
         "--session-file",
-        str(job_session_path(job_id)),
+        str(session_path),
+        "--session-key",
+        job_id,
         "--cwd",
         str(cwd),
         "--task-stdin",
@@ -615,7 +623,7 @@ def run_job(job: dict[str, Any]) -> None:
         time.sleep(RETRY_DELAY_SECONDS)
 
 
-def claim_next_job() -> dict[str, Any] | None:
+def claim_next_job(excluded_projects: set[str] | None = None) -> dict[str, Any] | None:
     session_id = uuid.uuid4().hex
     status, job = api_json(
         "POST",
@@ -624,35 +632,68 @@ def claim_next_job() -> dict[str, Any] | None:
             "workerId": WORKER_ID,
             "sessionId": session_id,
             "leaseSeconds": LEASE_SECONDS,
+            "excludedProjects": sorted(excluded_projects or set()),
         },
     )
     return None if status == 204 else job
 
 
+def project_allows_parallel(project: str) -> bool:
+    git_config = PROJECT_CONFIGS.get(project, {}).get("git", {})
+    return isinstance(git_config, dict) and bool(git_config.get("enabled", False))
+
+
 def main() -> int:
     LOG.info(
-        "dispatcher started console=%s project_root=%s total_timeout=%s idle_timeout=%s",
+        "dispatcher started console=%s project_root=%s total_timeout=%s idle_timeout=%s max_workers=%s",
         CONSOLE_URL,
         PROJECT_ROOT,
         TOTAL_TIMEOUT_SECONDS,
         IDLE_TIMEOUT_SECONDS,
+        MAX_WORKERS,
     )
     recover_running_jobs()
-    while True:
-        try:
-            job = claim_next_job()
-            if job is None:
+    active: dict[Future[None], str] = {}
+    with ThreadPoolExecutor(max_workers=MAX_WORKERS, thread_name_prefix="pseudo-codex") as executor:
+        while True:
+            try:
+                for future in [item for item in active if item.done()]:
+                    project = active.pop(future)
+                    try:
+                        future.result()
+                    except Exception as exc:
+                        LOG.exception("worker failed project=%s: %r", project, exc)
+
+                if len(active) >= MAX_WORKERS:
+                    time.sleep(0.5)
+                    continue
+
+                excluded_projects = {
+                    project for project in active.values()
+                    if not project_allows_parallel(project)
+                }
+                job = claim_next_job(excluded_projects)
+                if job is None:
+                    time.sleep(POLL_SECONDS)
+                    continue
+                if job.get("kind") == "test" or job.get("isTest") is True:
+                    LOG.error("console returned a test job; refusing job=%s", job.get("id"))
+                    continue
+
+                project = str(job.get("project", ""))
+                active[executor.submit(run_job, job)] = project
+                LOG.info(
+                    "scheduled job=%s project=%s active=%s/%s",
+                    job.get("id"),
+                    project,
+                    len(active),
+                    MAX_WORKERS,
+                )
+            except KeyboardInterrupt:
+                return 0
+            except Exception as exc:
+                LOG.exception("dispatcher loop error: %r", exc)
                 time.sleep(POLL_SECONDS)
-                continue
-            if job.get("kind") == "test" or job.get("isTest") is True:
-                LOG.error("console returned a test job; refusing job=%s", job.get("id"))
-                continue
-            run_job(job)
-        except KeyboardInterrupt:
-            return 0
-        except Exception as exc:
-            LOG.exception("dispatcher loop error: %r", exc)
-            time.sleep(POLL_SECONDS)
 
 
 if __name__ == "__main__":

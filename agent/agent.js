@@ -68,6 +68,7 @@ function parseArgs(argv) {
     jobId: process.env.PSEUDO_CODEX_JOB_ID || null,
     consoleUrl: process.env.PSEUDO_CODEX_CONSOLE_URL || null,
     sessionFile: process.env.PSEUDO_CODEX_SESSION_FILE || null,
+    sessionKey: process.env.PSEUDO_CODEX_SESSION_KEY || null,
     hostWorkspace: null,
     hostProductionRoot: null,
     hostDeployCommand: null,
@@ -83,6 +84,7 @@ function parseArgs(argv) {
     else if (argv[i] === '--job-id') args.jobId = argv[++i];
     else if (argv[i] === '--console-url') args.consoleUrl = argv[++i];
     else if (argv[i] === '--session-file') args.sessionFile = argv[++i];
+    else if (argv[i] === '--session-key') args.sessionKey = argv[++i];
     else if (argv[i] === '--host-workspace') args.hostWorkspace = argv[++i];
     else if (argv[i] === '--host-production-root') args.hostProductionRoot = argv[++i];
     else if (argv[i] === '--host-deploy-command') args.hostDeployCommand = argv[++i];
@@ -95,7 +97,7 @@ function parseArgs(argv) {
 
 // ─── ChatGPT call ─────────────────────────────────────────────────────────────
 
-function ask(prompt, isNew = false, sessionFile = null) {
+function ask(prompt, isNew = false, sessionFile = null, sessionKey = null) {
   // Keep large command output out of argv so the OS argument-size limit cannot
   // terminate a job. The browser client reads this file before making its HTTP request.
   const promptDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'pseudo-codex-prompt-'));
@@ -104,6 +106,7 @@ function ask(prompt, isNew = false, sessionFile = null) {
   const flags = [];
   if (isNew) flags.push('--new');
   if (sessionFile) flags.push('--session-file', sessionFile);
+  if (sessionKey) flags.push('--session-key', sessionKey);
   flags.push('--prompt-file', promptFile);
 
   try {
@@ -199,6 +202,19 @@ async function reportResult(args, payload) {
   } catch (error) {
     console.error('[result warning] ' + error.message);
   }
+}
+
+function conversationMetadata(args) {
+  if (!args.sessionFile || !fs.existsSync(args.sessionFile)) {
+    return { workerSessionId: args.sessionKey || args.jobId || '' };
+  }
+  const chatConversationUrl = fs.readFileSync(args.sessionFile, 'utf8').trim();
+  const match = chatConversationUrl.match(/\/c\/([^/?#]+)/);
+  return {
+    chatConversationId: match ? match[1] : '',
+    chatConversationUrl,
+    workerSessionId: args.sessionKey || args.jobId || '',
+  };
 }
 
 async function reportTurn(args, payload) {
@@ -775,6 +791,8 @@ async function main() {
     args.task = fs.readFileSync(0, 'utf8');
   }
 
+  if (!args.sessionKey && args.jobId) args.sessionKey = args.jobId;
+
   if (!args.task) {
     console.error(
       'Usage: node agent.js [--files f1,f2] [--check "cmd"] [--cwd /path] [--auto] [--reuse-chat] "task"\n' +
@@ -984,8 +1002,17 @@ async function main() {
     await reportProgress(args, 'waiting_chatgpt', 'ChatGPT回答待ち turn=' + turns, statePayload({}));
     const sentPrompt = compactContext(prompt);
     const sentAt = new Date().toISOString();
-    const response = ask(sentPrompt, isNew, args.sessionFile);
+    const response = ask(sentPrompt, isNew, args.sessionFile, args.sessionKey);
     isNew = false;
+    const metadata = conversationMetadata(args);
+    if (metadata.chatConversationUrl) {
+      await reportProgress(
+        args,
+        'waiting_chatgpt',
+        'ChatGPT会話をジョブへ保存 turn=' + turns,
+        statePayload(metadata)
+      );
+    }
 
     if (/^\[ERROR\]/m.test(response)) {
       if (response.includes('MODEL_USAGE_LIMIT')) {
