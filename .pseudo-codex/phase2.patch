@@ -2,14 +2,14 @@ diff --git a/agent/agent.js b/agent/agent.js
 index 4749d0d..0000000 100644
 --- a/agent/agent.js
 +++ b/agent/agent.js
-@@ -44,6 +44,9 @@ const MAX_INSPECT_TURNS = Number.parseInt(process.env.PSEUDO_CODEX_MAX_INSPECT_TU
+@@ -44,3 +44,6 @@ const MAX_INSPECT_TURNS = Number.parseInt(process.env.PSEUDO_CODEX_MAX_INSPECT_TU
  const MAX_CONTEXT_CHARS = Number.parseInt(process.env.PSEUDO_CODEX_MAX_CONTEXT_CHARS || '200000', 10);
  const COMPLETE_MARKER = '===TASK_COMPLETE===';
 +const GITHUB_COMPLETE_START = '===GITHUB_COMPLETE===';
 +const GITHUB_COMPLETE_END = '===END_GITHUB_COMPLETE===';
 +const GITHUB_DIRECT_MAX_TURNS = Number.parseInt(process.env.PSEUDO_CODEX_GITHUB_DIRECT_MAX_TURNS || '10', 10);
  const CHATGPT_REQUEST_TIMEOUT_MS = Number.parseInt(
-@@ -75,7 +78,12 @@ function parseArgs(argv) {
+@@ -75,5 +78,10 @@ function parseArgs(argv) {
      hostProductionRoot: null,
      hostDeployCommand: null,
      taskFile: null,
@@ -32,7 +32,7 @@ index 4749d0d..0000000 100644
      else                            args.task  = argv[i];
    }
    return args;
-@@ -374,6 +386,104 @@ function buildInitialPrompt(task, files, cwd) {
+@@ -374,4 +386,138 @@ function buildInitialPrompt(task, files, cwd) {
    return prompt;
  }
  
@@ -185,7 +185,7 @@ index 4749d0d..0000000 100644
    }
    return patches;
  }
-@@ -423,13 +533,14 @@ function parseEditBlocks(response) {
+@@ -423,10 +533,12 @@ function parseEditBlocks(response) {
    const normalized = String(response || '').replace(/\r\n?/g, '\n');
    const edits = [];
    const regex = /===EDIT:\s*([^\n=]+)===\n===OLD===\n([\s\S]*?)\n===NEW===\n([\s\S]*?)\n===ENDEDIT===/g;
@@ -199,7 +199,7 @@ index 4749d0d..0000000 100644
        oldText: match[2],
        newText: match[3],
      });
-@@ -440,12 +551,14 @@ function parseReplaceBlocks(response) {
+@@ -440,8 +551,10 @@ function parseReplaceBlocks(response) {
    const regex = /===REPLACE:\s*([^\n=]+)===\n===OLD===\n([\s\S]*?)\n===NEW===\n([\s\S]*?)\n===ENDREPLACE===/g;
    let match;
    while ((match = regex.exec(normalized)) !== null) {
@@ -211,7 +211,7 @@ index 4749d0d..0000000 100644
        oldText: match[2],
        newText: match[3],
      });
-@@ -476,6 +589,13 @@ function commandValidationError(command) {
+@@ -476,5 +589,12 @@ function commandValidationError(command) {
    if (/base64\s+(?:--decode|-d)\b|gzip\s+(?:--decompress|-d)\b|\.gz\.b64\b/i.test(command)) {
      return 'Refused encoded patch payload in RUN block. Use a unified PATCH block instead.';
    }
@@ -224,7 +224,7 @@ index 4749d0d..0000000 100644
 +  }
    return '';
  }
-@@ -616,6 +736,10 @@ async function applyEdits(edits, cwd) {
+@@ -616,3 +736,7 @@ async function applyEdits(edits, cwd) {
      }
      const beforeSha = sha256File(fullPath);
 +    if (edit.expectedSha && edit.expectedSha !== beforeSha) {
@@ -232,7 +232,7 @@ index 4749d0d..0000000 100644
 +      continue;
 +    }
      const content = fs.readFileSync(fullPath, 'utf8');
-@@ -651,6 +775,10 @@ async function applyReplacements(replacements, cwd) {
+@@ -651,3 +775,8 @@ async function applyReplacements(replacements, cwd) {
      }
      const content = fs.readFileSync(fullPath, 'utf8');
 +    const beforeSha = sha256File(fullPath);
@@ -241,12 +241,12 @@ index 4749d0d..0000000 100644
 +      continue;
 +    }
      const occurrences = content.split(replacement.oldText).length - 1;
-@@ -660,7 +788,6 @@ async function applyReplacements(replacements, cwd) {
+@@ -660,4 +788,3 @@ async function applyReplacements(replacements, cwd) {
        continue;
      }
 -    const beforeSha = sha256File(fullPath);
      writeTextFileAtomic(fullPath, content.replace(replacement.oldText, replacement.newText));
-@@ -686,6 +813,10 @@ async function applyPatches(patches, cwd) {
+@@ -686,4 +813,8 @@ async function applyPatches(patches, cwd) {
        continue;
      }
      const beforeSha = sha256File(targetPath);
@@ -255,7 +255,7 @@ index 4749d0d..0000000 100644
 +      continue;
 +    }
      const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'pseudo-codex-patch-'));
-@@ -786,6 +917,11 @@ async function main() {
+@@ -786,4 +917,9 @@ async function main() {
      process.exit(1);
    }
  
@@ -265,7 +265,7 @@ index 4749d0d..0000000 100644
 +  }
 +
    console.log(`\nTask : ${args.task}`);
-@@ -1194,7 +1330,18 @@ async function main() {
+@@ -1194,6 +1330,6 @@ async function main() {
  
  }
  
@@ -273,7 +273,7 @@ index 4749d0d..0000000 100644
 +async function handleFatalError(err) {
    const args = parseArgs(process.argv.slice(2));
    await reportResult(args, {
-@@ -1209,4 +1356,19 @@ main().catch(async err => {
+@@ -1209,4 +1356,18 @@ main().catch(async err => {
    });
    console.error(err);
    process.exit(1);
