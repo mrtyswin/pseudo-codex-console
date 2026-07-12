@@ -10,11 +10,11 @@
     "deploymentOwner": "host_dispatcher",
     "requiresDeployment": true,
     "git": {
-      "enabled": false,
+      "enabled": true,
       "remote": "origin",
       "baseBranch": "main",
-      "branchPrefix": "chatgpt-job",
-      "push": false
+      "branchPrefix": "request-console",
+      "push": true
     }
   }
 }

@@ -273,6 +273,18 @@ def task_for(job: dict[str, Any]) -> str:
             "Task instruction:",
             str(job.get("instruction", "")),
     ]
+    git_config = project_config.get("git", {})
+    if isinstance(git_config, dict) and git_config.get("enabled", False):
+        lines.extend(
+            [
+                "",
+                "GIT AUTHORING CONTRACT:",
+                "This project is configured to treat the Git workspace as the source of truth.",
+                "Make file changes only inside the sandbox workspace that mirrors the repository checkout.",
+                "Do not attempt manual git push credentials setup inside the task.",
+                "After you verify the change and output ===TASK_COMPLETE===, the host dispatcher will commit and optionally push using host-side credentials if configured.",
+            ]
+        )
     if int(job.get("attempts", 0)) > 1:
         prior_log = str(job.get("workerLog", ""))
         relevant = [

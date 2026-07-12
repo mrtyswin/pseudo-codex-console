@@ -1894,6 +1894,47 @@ return {};
 }
 }
 
+function writeProjectConfigs(configs) {
+const directory = path.dirname(PROJECT_CONFIG_PATH);
+fs.mkdirSync(directory, { recursive: true });
+fs.writeFileSync(
+PROJECT_CONFIG_PATH,
+JSON.stringify(configs, null, 2) + "\n",
+  "utf8"
+);
+}
+
+function projectGitConfig(projectConfig) {
+const git = projectConfig && typeof projectConfig.git === "object"
+? projectConfig.git
+: {};
+return {
+enabled: git.enabled === true,
+remote: typeof git.remote === "string" && git.remote.trim() ? git.remote.trim() : "origin",
+baseBranch: typeof git.baseBranch === "string" && git.baseBranch.trim() ? git.baseBranch.trim() : "main",
+branchPrefix: typeof git.branchPrefix === "string" && git.branchPrefix.trim() ? git.branchPrefix.trim() : "chatgpt-job",
+push: git.push === true
+};
+}
+
+function projectSummary(name, projectConfig) {
+const config = projectConfig && typeof projectConfig === "object" ? projectConfig : {};
+const git = projectGitConfig(config);
+return {
+name,
+workspace: typeof config.workspace === "string" ? config.workspace : "",
+sandboxWorkspace: typeof config.sandboxWorkspace === "string" ? config.sandboxWorkspace : "",
+productionRoot: typeof config.productionRoot === "string" ? config.productionRoot : "",
+deployCommand: typeof config.deployCommand === "string" ? config.deployCommand : "",
+verifyCommand: typeof config.verifyCommand === "string" ? config.verifyCommand : "",
+service: typeof config.service === "string" ? config.service : "",
+healthUrl: typeof config.healthUrl === "string" ? config.healthUrl : "",
+deploymentOwner: typeof config.deploymentOwner === "string" ? config.deploymentOwner : "",
+requiresDeployment: config.requiresDeployment === true,
+git
+};
+}
+
 function redactSecrets(value) {
 return String(value || "")
 .replace(/\b(Bearer)\s+[A-Za-z0-9._~+\/-]+/gi, "$1 [REDACTED]")
@@ -2082,6 +2123,57 @@ project: String(value.project || DEFAULT_PROJECT).trim(),
 title: String(value.title || "").trim(),
 instruction: String(value.instruction || "").trim(),
 kind: value.kind === "test" || value.isTest === true ? "test" : "job"
+};
+}
+
+function parseBooleanField(value) {
+if (value === true) return true;
+const normalized = String(value || "").trim().toLowerCase();
+return normalized === "true" || normalized === "1" || normalized === "on" || normalized === "yes";
+}
+
+function parseProjectConfigRequest(request, body) {
+const value = parseBody(request, body);
+const name = String(value.name || value.project || "").trim();
+const workspace = String(value.workspace || "").trim();
+const requiresDeployment = parseBooleanField(value.requiresDeployment);
+const gitEnabled = parseBooleanField(value.gitEnabled);
+const gitPush = parseBooleanField(value.gitPush);
+const config = {
+workspace,
+sandboxWorkspace: String(value.sandboxWorkspace || "").trim(),
+productionRoot: String(value.productionRoot || "").trim(),
+deployCommand: String(value.deployCommand || "").trim(),
+verifyCommand: String(value.verifyCommand || "").trim(),
+service: String(value.service || "").trim(),
+healthUrl: String(value.healthUrl || "").trim(),
+deploymentOwner: String(value.deploymentOwner || "").trim(),
+requiresDeployment,
+git: {
+enabled: gitEnabled,
+remote: String(value.gitRemote || "origin").trim() || "origin",
+baseBranch: String(value.gitBaseBranch || "main").trim() || "main",
+branchPrefix: String(value.gitBranchPrefix || "chatgpt-job").trim() || "chatgpt-job",
+push: gitPush
+}
+};
+
+if (!PROJECT_PATTERN.test(name)) {
+throw new Error("project name must match [a-z0-9][a-z0-9-]{0,63}");
+}
+if (!workspace) {
+throw new Error("workspace is required");
+}
+if (requiresDeployment && !config.deployCommand) {
+throw new Error("deployCommand is required when requiresDeployment is true");
+}
+if (gitEnabled && !PROJECT_PATTERN.test(config.git.branchPrefix.replace(/[/.]/g, "-"))) {
+throw new Error("git branch prefix must be a simple slug-like value");
+}
+
+return {
+name,
+config
 };
 }
 
@@ -2886,13 +2978,90 @@ return jobs.map(renderJobCard).join("");
 function renderProjectOptions() {
 const names = Object.keys(readProjectConfigs())
 .filter(function(name) { return PROJECT_PATTERN.test(name); })
-.sort();
+.sort(function(left, right) {
+if (left === DEFAULT_PROJECT) return -1;
+if (right === DEFAULT_PROJECT) return 1;
+return left.localeCompare(right);
+});
 if (names.length === 0) names.push(DEFAULT_PROJECT);
 return names.map(function(name) {
 return '<option value="' + escapeHtml(name) + '"' +
 (name === DEFAULT_PROJECT ? " selected" : "") + ">" +
 escapeHtml(name) + "</option>";
 }).join("");
+}
+
+function renderProjectCatalog() {
+const configs = readProjectConfigs();
+const names = Object.keys(configs)
+.filter(function(name) { return PROJECT_PATTERN.test(name); })
+.sort(function(left, right) {
+if (left === DEFAULT_PROJECT) return -1;
+if (right === DEFAULT_PROJECT) return 1;
+return left.localeCompare(right);
+});
+
+if (names.length === 0) {
+return '<p class="empty">まだプロジェクト設定がありません。下のフォームから追加してください。</p>';
+}
+
+return names.map(function(name) {
+const summary = projectSummary(name, configs[name]);
+const gitMode = summary.git.enabled
+? (summary.git.push ? "GitHub正本・push有効" : "Git管理あり・push無効")
+: "ローカル作業のみ";
+const deployMode = summary.requiresDeployment
+? (summary.deployCommand ? "ホスト反映あり" : "要反映だが deployCommand 未設定")
+: "反映不要";
+const note = name === DEFAULT_PROJECT
+? '<div class="project-note"><strong>推奨:</strong> このプロジェクトは GitHub を正本にして、ChatGPT には repo 上の変更作成をさせるのが安定です。ホスト反映は dispatcher が担当します。</div>'
+: "";
+return [
+'<article class="project-card">',
+'<div class="project-card-head"><h3>', escapeHtml(name), '</h3>',
+summary.healthUrl ? '<a href="' + escapeHtml(summary.healthUrl) + '" target="_blank" rel="noopener">health</a>' : "",
+'</div>',
+'<div class="project-facts"><span>Workspace: <strong>', escapeHtml(summary.workspace || "(未設定)"), '</strong></span></div>',
+summary.sandboxWorkspace ? '<div class="project-facts"><span>Sandbox: <strong>' + escapeHtml(summary.sandboxWorkspace) + '</strong></span></div>' : "",
+'<div class="project-facts"><span>配備: <strong>', escapeHtml(deployMode), '</strong></span><span>Git: <strong>', escapeHtml(gitMode), '</strong></span></div>',
+summary.productionRoot ? '<div class="project-facts"><span>Production Root: <strong>' + escapeHtml(summary.productionRoot) + '</strong></span></div>' : "",
+summary.service ? '<div class="project-facts"><span>Service: <strong>' + escapeHtml(summary.service) + '</strong></span></div>' : "",
+summary.git.enabled ? '<div class="project-facts"><span>Remote: <strong>' + escapeHtml(summary.git.remote) + '</strong></span><span>Base: <strong>' + escapeHtml(summary.git.baseBranch) + '</strong></span><span>Branch Prefix: <strong>' + escapeHtml(summary.git.branchPrefix) + '</strong></span></div>' : "",
+note,
+'</article>'
+].join("");
+}).join("");
+}
+
+function renderProjectConfigForm() {
+return [
+'<form method="post" action="/projects" class="project-config-form">',
+'<div class="project-config-grid">',
+'<div><label for="project-config-name">プロジェクト名</label><input id="project-config-name" name="name" maxlength="64" placeholder="wordpress-demo" required></div>',
+'<div><label for="project-config-workspace">Workspace</label><input id="project-config-workspace" name="workspace" maxlength="500" placeholder="/home/ubuntu/chatgpt-projects/wordpress-demo" required></div>',
+'<div><label for="project-config-sandbox">Sandbox Workspace</label><input id="project-config-sandbox" name="sandboxWorkspace" maxlength="500" placeholder="/mnt/workspace"></div>',
+'<div><label for="project-config-health">Health URL</label><input id="project-config-health" name="healthUrl" maxlength="500" placeholder="http://127.0.0.1:8080/health"></div>',
+'<div><label for="project-config-production">Production Root</label><input id="project-config-production" name="productionRoot" maxlength="500" placeholder="/opt/pseudo-codex-console"></div>',
+'<div><label for="project-config-service">Service / Container</label><input id="project-config-service" name="service" maxlength="300" placeholder="pseudo-codex-console.service"></div>',
+'<div><label for="project-config-deploy">Deploy Command</label><input id="project-config-deploy" name="deployCommand" maxlength="500" placeholder="/usr/local/libexec/pseudo-codex-deploy-request-console"></div>',
+'<div><label for="project-config-verify">Verify Command</label><input id="project-config-verify" name="verifyCommand" maxlength="500" placeholder="/usr/local/lib/pseudo-codex-console-deploy/verify-live.js"></div>',
+'<div><label for="project-config-owner">Deployment Owner</label><input id="project-config-owner" name="deploymentOwner" maxlength="100" placeholder="host_dispatcher"></div>',
+'</div>',
+'<div class="checkbox-row"><label><input type="checkbox" name="requiresDeployment" value="true"> 本番反映が必要</label></div>',
+'<div class="project-git-box">',
+'<h3>GitHub / Git 運用</h3>',
+'<p class="helper">`request-console` はここを有効にして GitHub を正本にする運用を推奨します。ChatGPT は workspace 内で修正し、dispatcher が commit/push を担当します。</p>',
+'<div class="checkbox-row"><label><input type="checkbox" name="gitEnabled" value="true"> Git 管理を有効にする</label><label><input type="checkbox" name="gitPush" value="true"> 成功後に push する</label></div>',
+'<div class="project-config-grid">',
+'<div><label for="project-config-remote">Git Remote</label><input id="project-config-remote" name="gitRemote" maxlength="200" value="origin"></div>',
+'<div><label for="project-config-base">Base Branch</label><input id="project-config-base" name="gitBaseBranch" maxlength="200" value="main"></div>',
+'<div><label for="project-config-prefix">Branch Prefix</label><input id="project-config-prefix" name="gitBranchPrefix" maxlength="200" value="chatgpt-job"></div>',
+'</div>',
+'<p class="helper">注意: push を有効にしても、Ubuntu 側に Git author と GitHub 認証が無ければ最後の push で止まります。</p>',
+'</div>',
+'<button type="submit">プロジェクト設定を保存</button>',
+'</form>'
+].join("");
 }
 
 function renderPage(jobs, message) {
@@ -2951,6 +3120,19 @@ return [
 ".recovery-info{margin-top:10px;padding:9px 11px;border-left:4px solid #765600;background:#fff8df;color:#604800;font-size:.88rem}.recovery-info a{font-weight:700;color:#604800}",
 ".job-actions{display:flex;gap:8px;margin-top:10px}.job-actions button{margin:0;padding:7px 12px;background:#5b6472}.job-actions button:disabled{opacity:.55;cursor:wait}",
 ".handoff-actions{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:10px}.handoff-actions button{margin:0;padding:8px 12px;background:#176544}.handoff-actions button:disabled{opacity:.55;cursor:wait}.handoff-actions a{font-weight:700;color:#176544}.handoff-actions span{font-size:.82rem;font-weight:700;color:#176544}",
+".project-grid{display:grid;gap:14px}",
+".project-card{background:#fbfcff;border:1px solid #dbe1ea;border-radius:12px;padding:16px}",
+".project-card-head{display:flex;justify-content:space-between;gap:12px;align-items:flex-start}",
+".project-card-head a{font-weight:700;color:#2458c6;text-decoration:none}",
+".project-facts{display:flex;gap:12px;flex-wrap:wrap;margin-top:10px;color:#4a5568;font-size:.9rem}",
+".project-note{margin-top:12px;padding:10px 12px;border-left:4px solid #176544;background:#eef8f2;color:#145c2b;font-size:.9rem}",
+".project-config-form{display:grid;gap:14px}",
+".project-config-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}",
+".project-git-box{border:1px solid #dbe1ea;border-radius:12px;padding:14px;background:#fbfcff}",
+".checkbox-row{display:flex;gap:18px;flex-wrap:wrap;align-items:center}",
+".checkbox-row label{display:inline-flex;gap:8px;align-items:center;margin:0;font-weight:700}",
+".checkbox-row input{width:auto}",
+".helper{font-size:.88rem;color:#687386}",
 "details{margin-top:10px;border:1px solid #e3e7ee;border-radius:8px;padding:9px 11px}",
 "summary{cursor:pointer;font-weight:700}",
 "pre{white-space:pre-wrap;word-break:break-word;margin:10px 0 0;font:inherit;line-height:1.55}",
@@ -2961,7 +3143,7 @@ return [
 ".history-status{font-size:.82rem;font-weight:700;color:#765600}",
 ".history-log{display:block;max-block-size:min(48dvh,28rem);min-block-size:10rem;overflow:auto;overscroll-behavior:contain;white-space:pre-wrap;overflow-wrap:anywhere;word-break:break-word;user-select:text;cursor:text}",
 ".empty{text-align:center;color:#687386}",
-"@media(max-width:700px){main{width:min(100% - 20px,1200px);margin:20px auto}.card,.job{padding:16px}header,.job-head{display:block}.health,.badges{margin-top:12px;justify-content:flex-start}.job-filters{grid-template-columns:1fr}.result-count{justify-self:start;padding-bottom:0}}",
+"@media(max-width:700px){main{width:min(100% - 20px,1200px);margin:20px auto}.card,.job,.project-card{padding:16px}header,.job-head,.project-card-head{display:block}.health,.badges{margin-top:12px;justify-content:flex-start}.job-filters,.project-config-grid{grid-template-columns:1fr}.result-count{justify-self:start;padding-bottom:0}}",
 "</style>",
 "</head>",
 "<body>",
@@ -2988,6 +3170,18 @@ renderProjectOptions(),
 '<textarea id="instruction" name="instruction" maxlength="20000" required></textarea>',
 '<button type="submit">キューへ登録</button>',
 "</form>",
+"</section>",
+'<section class="card">',
+"<h2>プロジェクト設定</h2>",
+'<p class="helper">このコンソールは「登録済みプロジェクト」を対象にジョブを流します。新しい対象を増やす時は、先にここで登録します。</p>',
+'<div class="project-grid">',
+renderProjectCatalog(),
+"</div>",
+"</section>",
+'<section class="card">',
+"<h2>プロジェクトを追加・更新</h2>",
+'<p class="helper">GitHub 連携を使う場合は Git を有効にし、必要なら push も有効にしてください。`request-console` 自身は GitHub を正本にする運用が安定です。</p>',
+renderProjectConfigForm(),
 "</section>",
 '<section class="card">',
 "<h2>ジョブ一覧</h2>",
@@ -3107,6 +3301,24 @@ return;
 if (request.method === "GET" && url.pathname === "/api/jobs") {
 sendJson(response, 200, {
 jobs: readJobs()
+});
+return;
+}
+
+if (request.method === "GET" && url.pathname === "/api/projects") {
+const configs = readProjectConfigs();
+const projects = Object.keys(configs)
+.filter(function(name) { return PROJECT_PATTERN.test(name); })
+.sort(function(left, right) {
+if (left === DEFAULT_PROJECT) return -1;
+if (right === DEFAULT_PROJECT) return 1;
+return left.localeCompare(right);
+})
+.map(function(name) {
+return projectSummary(name, configs[name]);
+});
+sendJson(response, 200, {
+projects
 });
 return;
 }
@@ -3427,6 +3639,8 @@ if (request.method === "GET" && url.pathname === "/") {
 const message =
 url.searchParams.get("created") === "1"
 ? "ジョブを待機中として登録しました。"
+: url.searchParams.get("project_saved") === "1"
+? "プロジェクト設定を保存しました。"
 : "";
 
 sendHtml(
@@ -3436,6 +3650,41 @@ sendHtml(
 );
 return;
 
+}
+
+if (
+request.method === "POST" &&
+(url.pathname === "/projects" || url.pathname === "/api/projects")
+) {
+try {
+const values = parseProjectConfigRequest(
+request,
+await readBody(request)
+);
+const configuredProjects = readProjectConfigs();
+configuredProjects[values.name] = values.config;
+writeProjectConfigs(configuredProjects);
+
+const acceptsJson =
+String(request.headers.accept || "").includes("application/json") ||
+String(request.headers["content-type"] || "").includes("application/json") ||
+url.pathname === "/api/projects";
+
+if (acceptsJson) {
+sendJson(response, 201, projectSummary(values.name, values.config));
+return;
+}
+
+response.writeHead(303, {
+Location: "/?project_saved=1"
+});
+response.end();
+} catch (error) {
+sendJson(response, 400, {
+error: error instanceof Error ? error.message : "invalid request"
+});
+}
+return;
 }
 
 if (
