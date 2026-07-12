@@ -19,4 +19,6 @@ jobs:
       - run: npm run check
       - run: python3 -m py_compile dispatcher/dispatcher.py scripts/chatgpt-compose.py scripts/chatgpt-compose-bridge.py
       - run: python3 tests/dispatcher-git.check.py
+      - run: python3 tests/dispatcher-github-direct.check.py
+      - run: python3 tests/dispatcher-config-reload.check.py
       - run: python3 tests/dispatcher-parallel.check.py
