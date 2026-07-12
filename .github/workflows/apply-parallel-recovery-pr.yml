@@ -30,6 +30,7 @@ jobs:
 
           script = Path('scripts/apply-parallel-recovery-decoded.py')
           source = script.read_text(encoding='utf-8')
+
           old = '''    ''' + "'''" + '''} else {
           applyStage(job, "queued", "再実行待ちへ戻す");
           }
@@ -48,7 +49,20 @@ jobs:
           }''' + "'''" + ''','''
           if old not in source:
               raise SystemExit('automatic continuation compatibility marker not found')
-          script.write_text(source.replace(old, new, 1), encoding='utf-8')
+          source = source.replace(old, new, 1)
+
+          source = source.replace(
+              "    '''  console.log(`\\nTask : ${args.task}`);''',",
+              "    r'''  console.log(`\\nTask : ${args.task}`);''',",
+              1,
+          )
+          source = source.replace(
+              "    '''  if (!args.sessionKey && args.jobId) args.sessionKey = args.jobId;\\n\\n  console.log(`\\nTask : ${args.task}`);''',",
+              "    r'''  if (!args.sessionKey && args.jobId) args.sessionKey = args.jobId;\\n\\n  console.log(`\\nTask : ${args.task}`);''',",
+              1,
+          )
+
+          script.write_text(source, encoding='utf-8')
           PY
           python3 scripts/apply-parallel-recovery-decoded.py >> /tmp/apply-parallel.log 2>&1
           status=$?
