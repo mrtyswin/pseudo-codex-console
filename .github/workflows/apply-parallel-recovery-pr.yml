@@ -115,6 +115,30 @@ jobs:
               'worker = { workerId: "", sessionId: "", pid: null, leaseSeconds: 300, excludedProjects: [] };'
           )
           app.write_text(text, encoding='utf-8')
+
+          chat = Path('agent/chatgpt.js')
+          text = chat.read_text(encoding='utf-8')
+          text = text.replace(
+              "sessions.set('default', Promise.resolve({\n      page: defaultPage,\n      tail: Promise.resolve(),\n    }));",
+              "sessions.set('default', Promise.resolve({\n      page: defaultPage,\n      tail: Promise.resolve(),\n      conversationUrl: initUrl,\n    }));",
+              1,
+          )
+          text = text.replace(
+              "return { page, tail: Promise.resolve() };",
+              "return { page, tail: Promise.resolve(), conversationUrl: initialUrl };",
+              1,
+          )
+          text = text.replace(
+              "const sessionUrl = readSessionUrl(activeSessionFile);",
+              "const sessionUrl = state.conversationUrl || readSessionUrl(activeSessionFile);",
+              1,
+          )
+          text = text.replace(
+              "const finalUrl = page.url();\n            if (conversationDetails(finalUrl).conversationId) {",
+              "const finalUrl = page.url();\n            state.conversationUrl = finalUrl;\n            if (conversationDetails(finalUrl).conversationId) {",
+              1,
+          )
+          chat.write_text(text, encoding='utf-8')
           PY
       - if: steps.apply.outcome == 'success'
         run: npm run check:syntax
