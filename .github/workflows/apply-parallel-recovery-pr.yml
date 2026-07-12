@@ -51,18 +51,24 @@ jobs:
               raise SystemExit('automatic continuation compatibility marker not found')
           source = source.replace(old, new, 1)
 
-          source = source.replace(
-              "    '''  console.log(`\\nTask : ${args.task}`);''',",
-              "    r'''  console.log(`\\nTask : ${args.task}`);''',",
-              1,
+          lines = source.splitlines()
+          marker_index = next(
+              (i for i, line in enumerate(lines) if '"agent session key assignment"' in line),
+              None,
           )
-          source = source.replace(
-              "    '''  if (!args.sessionKey && args.jobId) args.sessionKey = args.jobId;\\n\\n  console.log(`\\nTask : ${args.task}`);''',",
-              "    r'''  if (!args.sessionKey && args.jobId) args.sessionKey = args.jobId;\\n\\n  console.log(`\\nTask : ${args.task}`);''',",
-              1,
-          )
-
-          script.write_text(source, encoding='utf-8')
+          if marker_index is None:
+              raise SystemExit('agent session assignment marker not found')
+          patched = 0
+          for i in range(max(0, marker_index - 12), marker_index):
+              if lines[i].startswith("    '''  console.log(`"):
+                  lines[i] = "    r" + lines[i].lstrip()
+                  patched += 1
+              elif lines[i].startswith("    '''  if (!args.sessionKey"):
+                  lines[i] = "    r" + lines[i].lstrip()
+                  patched += 1
+          if patched != 2:
+              raise SystemExit(f'agent session raw-string patch expected 2 lines, found {patched}')
+          script.write_text('\n'.join(lines) + '\n', encoding='utf-8')
           PY
           python3 scripts/apply-parallel-recovery-decoded.py >> /tmp/apply-parallel.log 2>&1
           status=$?
