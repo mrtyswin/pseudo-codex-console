@@ -90,17 +90,12 @@ jobs:
               )
           path.write_text('\n'.join(output) + '\n', encoding='utf-8')
           PY
-            if ! patch --dry-run --batch --forward --fuzz=3 -p1 < .pseudo-codex/phase3.patch >.pseudo-codex/phase3.error 2>&1; then
-              git config user.name "Pseudo Codex GitHub Direct"
-              git config user.email "pseudo-codex@example.invalid"
-              git add .pseudo-codex/phase3.error .pseudo-codex/phase3.patch
-              git commit -m "Record dispatcher patch failure"
-              git push origin HEAD:${{ github.head_ref }}
-              echo 'applied=false' >> "$GITHUB_OUTPUT"
-              exit 0
-            fi
             patch --batch --forward --fuzz=3 -p1 < .pseudo-codex/phase3.patch
             rm -f .pseudo-codex/phase3.part.* .pseudo-codex/phase3.patch .pseudo-codex/phase3.error .pseudo-codex/phase3.trigger
+            changed=1
+          fi
+          if [ -f .pseudo-codex/verify-now ]; then
+            rm .pseudo-codex/verify-now
             changed=1
           fi
           echo "applied=$changed" >> "$GITHUB_OUTPUT"
@@ -134,7 +129,8 @@ jobs:
           git config user.name "Pseudo Codex GitHub Direct"
           git config user.email "pseudo-codex@example.invalid"
           git add -A
-          git commit -m "Implement GitHub-direct dispatcher and record verification"
+          git add -f .pseudo-codex/phase3.verify.log
+          git commit -m "Verify GitHub-direct dispatcher implementation"
           git push origin HEAD:${{ github.head_ref }}
       - name: Fail when verification failed
         if: steps.apply.outputs.applied == '1' && steps.verify.outputs.status != '0'
