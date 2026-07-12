@@ -1,4 +1,4 @@
-name: decode-parallel-recovery
+name: apply-parallel-recovery
 
 on:
   push:
@@ -9,7 +9,7 @@ permissions:
   contents: write
 
 jobs:
-  decode:
+  apply:
     if: github.actor != 'github-actions[bot]'
     runs-on: ubuntu-latest
     steps:
@@ -17,24 +17,68 @@ jobs:
         with:
           ref: feature/parallel-recovery
           fetch-depth: 0
-      - name: Decode implementation source
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Apply implementation
         run: |
           python3 - <<'PY'
-          import base64
-          import zlib
           from pathlib import Path
 
-          payload = ''.join(
-              Path(f'scripts/.apply-parallel.part{i}').read_text().strip()
-              for i in range(1, 5)
-          )
-          source = zlib.decompress(base64.b64decode(payload)).decode('utf-8')
-          Path('scripts/apply-parallel-recovery-decoded.py').write_text(source, encoding='utf-8')
+          script = Path('scripts/apply-parallel-recovery-decoded.py')
+          source = script.read_text(encoding='utf-8')
+          old = '''    ''' + "'''" + '''} else {
+          applyStage(job, "queued", "再実行待ちへ戻す");
+          }
+
+          return job;
+
+          });
+          }''' + "'''" + ''','''
+          new = '''    ''' + "'''" + '''} else {
+            applyStage(job, "queued", "再実行待ちへ戻す");
+          }
+
+          return job;
+
+          });
+          }''' + "'''" + ''','''
+          if old not in source:
+              raise SystemExit('automatic continuation compatibility marker not found')
+          script.write_text(source.replace(old, new, 1), encoding='utf-8')
           PY
-      - name: Commit decoded source
+          python3 scripts/apply-parallel-recovery-decoded.py
+      - name: Apply compatibility fixes
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          check = Path('check.js')
+          text = check.read_text(encoding='utf-8')
+          text = text.replace(
+              "const marker = '<article class=\"job\" data-job-id=\"' + jobId + '\"';",
+              "const marker = 'class=\"job\" data-job-id=\"' + jobId + '\"';"
+          )
+          check.write_text(text, encoding='utf-8')
+
+          app = Path('app.js')
+          text = app.read_text(encoding='utf-8')
+          text = text.replace(
+              'worker = { workerId: "", sessionId: "", pid: null, leaseSeconds: 300 };',
+              'worker = { workerId: "", sessionId: "", pid: null, leaseSeconds: 300, excludedProjects: [] };'
+          )
+          app.write_text(text, encoding='utf-8')
+          PY
+      - run: npm run check:syntax
+      - run: npm run check
+      - run: python3 -m py_compile dispatcher/dispatcher.py scripts/chatgpt-compose.py scripts/chatgpt-compose-bridge.py
+      - run: python3 tests/dispatcher-git.check.py
+      - run: python3 tests/dispatcher-parallel.check.py
+      - run: git diff --check
+      - name: Commit implementation
         run: |
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add scripts/apply-parallel-recovery-decoded.py
-          git diff --cached --quiet || git commit -m "Decode parallel recovery implementation"
+          git add app.js check.js package.json agent/agent.js agent/chatgpt.js agent/fake-browser-client.js dispatcher/dispatcher.py tests/chatgpt-parallel.check.js tests/dispatcher-parallel.check.py .github/workflows/test.yml
+          git diff --cached --quiet || git commit -m "Add parallel jobs and recovery handoffs"
           git push
