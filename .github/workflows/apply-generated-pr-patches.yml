@@ -21,12 +21,32 @@ jobs:
         run: |
           changed=0
           if [ -f .pseudo-codex/phase2.patch ]; then
-            sed -i 's#^ const BROWSER_SERVICE = os.environ.get.*# const CHATGPT_REQUEST_TIMEOUT_MS = Number.parseInt(#' .pseudo-codex/phase2.patch
+            python3 - <<'PY'
+          from pathlib import Path
+          path = Path('.pseudo-codex/phase2.patch')
+          lines = path.read_text(encoding='utf-8').replace('\r\n', '\n').split('\n')
+          output = []
+          in_hunk = False
+          for line in lines:
+              if line.startswith('index 4749d0d..0000000 100755'):
+                  line = 'index 4749d0d..0000000 100644'
+              if line.startswith('@@'):
+                  in_hunk = True
+              elif line.startswith(('diff --git ', '--- ', '+++ ', 'index ')):
+                  in_hunk = False
+              elif in_hunk:
+                  if line == '':
+                      line = ' '
+                  elif line[0] not in ' +-\\':
+                      line = ' ' + line
+              output.append(line)
+          path.write_text('\n'.join(output), encoding='utf-8')
+          PY
             if ! git apply --check --recount .pseudo-codex/phase2.patch 2>.pseudo-codex/phase2.error; then
               git config user.name "Pseudo Codex GitHub Direct"
               git config user.email "pseudo-codex@example.invalid"
-              git add .pseudo-codex/phase2.error
-              git commit -m "Record GitHub-direct patch failure"
+              git add .pseudo-codex/phase2.error .pseudo-codex/phase2.patch
+              git commit -m "Record normalized GitHub-direct patch failure"
               git push origin HEAD:${{ github.head_ref }}
               echo 'applied=false' >> "$GITHUB_OUTPUT"
               exit 0
