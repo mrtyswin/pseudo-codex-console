@@ -1,0 +1,35 @@
+name: apply-history-autoscroll
+
+on:
+  push:
+    branches:
+      - fix/history-autoscroll
+    paths:
+      - tools/apply-history-autoscroll.py
+      - .github/workflows/apply-history-autoscroll.yml
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/history-autoscroll
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: python3 tools/apply-history-autoscroll.py
+      - run: npm run check:syntax
+      - run: npm run check
+      - run: git diff --check
+      - name: Commit generated change
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add app.js check.js
+          git commit -m "Fix history autoscroll behavior"
+          git push origin HEAD:fix/history-autoscroll
