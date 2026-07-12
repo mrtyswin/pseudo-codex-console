@@ -1,1 +1,1 @@
-trigger-error-capture
+trigger-normalized-apply
