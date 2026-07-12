@@ -1,0 +1,379 @@
+diff --git a/agent/agent.js b/agent/agent.js
+index 4749d0d..0000000 100755
+--- a/agent/agent.js
++++ b/agent/agent.js
+@@ -44,6 +44,9 @@ const MAX_INSPECT_TURNS = Number.parseInt(process.env.PSEUDO_CODEX_MAX_INSPECT_TU
+ const MAX_CONTEXT_CHARS = Number.parseInt(process.env.PSEUDO_CODEX_MAX_CONTEXT_CHARS || '200000', 10);
+ const COMPLETE_MARKER = '===TASK_COMPLETE===';
++const GITHUB_COMPLETE_START = '===GITHUB_COMPLETE===';
++const GITHUB_COMPLETE_END = '===END_GITHUB_COMPLETE===';
++const GITHUB_DIRECT_MAX_TURNS = Number.parseInt(process.env.PSEUDO_CODEX_GITHUB_DIRECT_MAX_TURNS || '10', 10);
+ const BROWSER_SERVICE = os.environ.get("PSEUDO_CODEX_BROWSER_SERVICE", "chatgpt-browser-agent.service");
+@@ -75,7 +78,12 @@ function parseArgs(argv) {
+     hostProductionRoot: null,
+     hostDeployCommand: null,
+     taskFile: null,
+-    taskStdin: false
++    taskStdin: false,
++    executionMode: process.env.PSEUDO_CODEX_EXECUTION_MODE || 'local',
++    githubRepository: process.env.PSEUDO_CODEX_GITHUB_REPOSITORY || '',
++    githubBaseBranch: process.env.PSEUDO_CODEX_GITHUB_BASE_BRANCH || 'main',
++    githubBranch: process.env.PSEUDO_CODEX_GITHUB_BRANCH || '',
++    githubPullRequestRequired: true
+   };
+@@ -92,6 +100,10 @@ function parseArgs(argv) {
+     else if (argv[i] === '--host-deploy-command') args.hostDeployCommand = argv[++i];
+     else if (argv[i] === '--task-file') args.taskFile = argv[++i];
+     else if (argv[i] === '--task-stdin') args.taskStdin = true;
++    else if (argv[i] === '--execution-mode') args.executionMode = argv[++i];
++    else if (argv[i] === '--github-repository') args.githubRepository = argv[++i];
++    else if (argv[i] === '--github-base-branch') args.githubBaseBranch = argv[++i];
++    else if (argv[i] === '--github-branch') args.githubBranch = argv[++i];
+     else                            args.task  = argv[i];
+   }
+   return args;
+@@ -374,6 +386,104 @@ function buildInitialPrompt(task, files, cwd) {
+   return prompt;
+ }
+ 
++function buildGithubDirectPrompt(args) {
++  if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(args.githubRepository)) {
++    throw new Error('GitHub direct mode requires --github-repository owner/repository.');
++  }
++  if (!args.githubBranch || !/^[A-Za-z0-9._/-]+$/.test(args.githubBranch)) {
++    throw new Error('GitHub direct mode requires a safe --github-branch.');
++  }
++  return [
++    'You are the implementation agent for a GitHub-direct coding task.',
++    'Use the connected GitHub tool to edit the repository directly. Do not output RUN, PATCH, EDIT, REPLACE, FILE, or FILE_BASE64 action blocks.',
++    `Repository: ${args.githubRepository}`,
++    `Base branch: ${args.githubBaseBranch}`,
++    `Required working branch: ${args.githubBranch}`,
++    'Create the required branch from the current base branch if it does not exist. Make the requested code changes on that branch, add or update tests, and create or update a pull request to the base branch.',
++    'Do not write directly to the base branch. Do not force-push. Do not expose credentials, internal tool IDs, file_* IDs, turn* IDs, or random code-block id attributes.',
++    'Keep the branch limited to this task. Preserve unrelated behavior.',
++    'When GitHub work is complete, return exactly one machine-readable result block:',
++    GITHUB_COMPLETE_START,
++    JSON.stringify({
++      repository: args.githubRepository,
++      branch: args.githubBranch,
++      baseBranch: args.githubBaseBranch,
++      commitSha: '<full commit SHA>',
++      pullRequestUrl: '<pull request URL>',
++      changedFiles: ['path/to/file'],
++      summary: '<concise implementation summary>',
++    }, null, 2),
++    GITHUB_COMPLETE_END,
++    'Do not claim completion until the branch, commit, pull request, and requested tests or CI evidence exist.',
++    '',
++    'Task:',
++    args.task,
++  ].join('\n');
++}
++
++function parseGithubCompletion(response) {
++  const normalized = String(response || '').replace(/\r\n?/g, '\n');
++  const start = normalized.indexOf(GITHUB_COMPLETE_START);
++  const end = normalized.indexOf(GITHUB_COMPLETE_END);
++  if (start < 0 || end <= start) return null;
++  const raw = normalized.slice(start + GITHUB_COMPLETE_START.length, end).trim();
++  let value;
++  try {
++    value = JSON.parse(raw);
++  } catch (_error) {
++    return null;
++  }
++  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
++  const result = {
++    repository: String(value.repository || '').trim(),
++    branch: String(value.branch || '').trim(),
++    baseBranch: String(value.baseBranch || '').trim(),
++    commitSha: String(value.commitSha || '').trim(),
++    pullRequestUrl: String(value.pullRequestUrl || '').trim(),
++    changedFiles: Array.isArray(value.changedFiles) ? value.changedFiles.map(String).slice(0, 200) : [],
++    summary: String(value.summary || '').trim(),
++  };
++  if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(result.repository)) return null;
++  if (!/^[A-Za-z0-9._/-]+$/.test(result.branch)) return null;
++  if (!/^[A-Fa-f0-9]{40}$/.test(result.commitSha)) return null;
++  if (!/^https:\/\/github\.com\/[^/]+\/[^/]+\/pull\/\d+\/?$/.test(result.pullRequestUrl)) return null;
++  return result;
++}
++
++async function runGithubDirect(args) {
++  let prompt = buildGithubDirectPrompt(args);
++  let isNew = args.sessionFile ? !fs.existsSync(args.sessionFile) : !args.reuseChat;
++  for (let turn = 1; turn <= GITHUB_DIRECT_MAX_TURNS; turn++) {
++    const sentAt = new Date().toISOString();
++    await reportProgress(args, 'sending_to_chatgpt', `GitHub直接編集をChatGPTへ送信 turn=${turn}`, {
++      phase: 'EDIT',
++      remainingTurns: GITHUB_DIRECT_MAX_TURNS - turn,
++    });
++    await reportProgress(args, 'waiting_chatgpt', `GitHub操作完了待ち turn=${turn}`, {
++      phase: 'EDIT',
++      remainingTurns: GITHUB_DIRECT_MAX_TURNS - turn,
++    });
++    const response = ask(compactContext(prompt), isNew, args.sessionFile, args.sessionKey);
++    isNew = false;
++    if (/^\[ERROR\]/m.test(response)) throw new Error(`ChatGPT browser request failed: ${response}`);
++    console.log(response);
++    await reportTurn(args, {
++      turn,
++      sentAt,
++      responseReceivedAt: new Date().toISOString(),
++      prompt,
++      response,
++      runCommands: [],
++      fileChanges: [],
++    });
++    const result = parseGithubCompletion(response);
++    if (result) {
++      if (
++        result.repository !== args.githubRepository ||
++        result.branch !== args.githubBranch ||
++        result.baseBranch !== args.githubBaseBranch
++      ) {
++        throw new Error('GitHub completion result does not match the configured repository or branch.');
++      }
++      await reportProgress(args, 'verifying', 'GitHubブランチ・PRをUbuntu検証へ引き渡し', {
++        phase: 'TEST',
++        changedFiles: result.changedFiles,
++      });
++      await reportResult(args, {
++        status: 'done',
++        lastError: '',
++        workerLog: '',
++        finalAnswer: result.summary || 'GitHub direct changes are ready for Ubuntu verification.',
++        executionResult: JSON.stringify(result, null, 2),
++        verificationResult: 'GitHub branch and pull request created; host-side verification is pending.',
++      });
++      console.log(`\n${GITHUB_COMPLETE_START}\n${JSON.stringify(result)}\n${GITHUB_COMPLETE_END}`);
++      console.log(`\n${COMPLETE_MARKER}`);
++      return;
++    }
++    prompt = [
++      'Continue the same GitHub task. Do not switch to local RUN/PATCH/EDIT actions.',
++      'Finish the branch, commit, tests, and pull request, then return the required GITHUB_COMPLETE JSON block.',
++      `Repository: ${args.githubRepository}`,
++      `Branch: ${args.githubBranch}`,
++      `Base branch: ${args.githubBaseBranch}`,
++    ].join('\n');
++  }
++  throw new Error(`GitHub direct turn budget reached: ${GITHUB_DIRECT_MAX_TURNS}`);
++}
++
+ // ─── Parsers ──────────────────────────────────────────────────────────────────
++
++function parseActionTarget(value) {
++  const match = String(value || '').trim().match(/^(.*?)(?:\s+SHA256:([a-f0-9]{64}))?$/i);
++  return {
++    path: String(match ? match[1] : value || '').trim(),
++    expectedSha: match && match[2] ? match[2].toLowerCase() : '',
++  };
++}
+@@ -411,10 +521,10 @@ function parsePatchBlocks(response) {
+   const normalized = String(response || '').replace(/\r\n?/g, '\n');
+   const patches = [];
+-  const regex = /===PATCH===\n([\s\S]*?)\n===ENDPATCH===/gi;
++  const regex = /===PATCH(?:\s+SHA256:([a-f0-9]{64}))?===\n([\s\S]*?)\n===ENDPATCH===/gi;
+   let match;
+   while ((match = regex.exec(normalized)) !== null) {
+-    const content = match[1].replace(/^\n|\n$/g, '');
+-    if (content) patches.push({ content });
++    const content = match[2].replace(/^\n|\n$/g, '');
++    if (content) patches.push({ content, expectedSha: (match[1] || '').toLowerCase() });
+   }
+   return patches;
+ }
+@@ -423,13 +533,14 @@ function parseEditBlocks(response) {
+   const normalized = String(response || '').replace(/\r\n?/g, '\n');
+   const edits = [];
+   const regex = /===EDIT:\s*([^\n=]+)===\n===OLD===\n([\s\S]*?)\n===NEW===\n([\s\S]*?)\n===ENDEDIT===/g;
+   let match;
+   while ((match = regex.exec(normalized)) !== null) {
++    const target = parseActionTarget(match[1]);
+     edits.push({
+-      path: match[1].trim(),
++      path: target.path,
++      expectedSha: target.expectedSha,
+       oldText: match[2],
+       newText: match[3],
+     });
+@@ -440,12 +551,14 @@ function parseReplaceBlocks(response) {
+   const regex = /===REPLACE:\s*([^\n=]+)===\n===OLD===\n([\s\S]*?)\n===NEW===\n([\s\S]*?)\n===ENDREPLACE===/g;
+   let match;
+   while ((match = regex.exec(normalized)) !== null) {
++    const target = parseActionTarget(match[1]);
+     replacements.push({
+-      path: match[1].trim(),
++      path: target.path,
++      expectedSha: target.expectedSha,
+       oldText: match[2],
+       newText: match[3],
+     });
+@@ -476,6 +589,13 @@ function commandValidationError(command) {
+   if (/base64\s+(?:--decode|-d)\b|gzip\s+(?:--decompress|-d)\b|\.gz\.b64\b/i.test(command)) {
+     return 'Refused encoded patch payload in RUN block. Use a unified PATCH block instead.';
+   }
++  if (
++    /\b(?:sed|perl)\b[^\n]*(?:-i|-pi)\b/i.test(command) ||
++    /python\d*\s+-c\b[\s\S]*(?:write_text|write_bytes|open\s*\([^)]*,\s*['"]w)/i.test(command) ||
++    /python\d*\s+-\s*<<[\s\S]*(?:write_text|write_bytes|open\s*\()/i.test(command)
++  ) {
++    return 'Refused direct file mutation inside a RUN block. Use PATCH, EDIT, REPLACE, or FILE so whitespace and rollback checks remain deterministic.';
++  }
+   return '';
+ }
+@@ -616,6 +736,10 @@ async function applyEdits(edits, cwd) {
+     }
+     const beforeSha = sha256File(fullPath);
++    if (edit.expectedSha && edit.expectedSha !== beforeSha) {
++      results.push({ cmd: label, output: `SHA256 mismatch; expected ${edit.expectedSha} actual ${beforeSha}.`, status: 2 });
++      continue;
++    }
+     const content = fs.readFileSync(fullPath, 'utf8');
+@@ -651,6 +775,10 @@ async function applyReplacements(replacements, cwd) {
+     }
+     const content = fs.readFileSync(fullPath, 'utf8');
++    const beforeSha = sha256File(fullPath);
++    if (replacement.expectedSha && replacement.expectedSha !== beforeSha) {
++      results.push({ cmd: label, output: `SHA256 mismatch; expected ${replacement.expectedSha} actual ${beforeSha}.`, status: 2 });
++      continue;
++    }
+     const occurrences = content.split(replacement.oldText).length - 1;
+@@ -660,7 +788,6 @@ async function applyReplacements(replacements, cwd) {
+       continue;
+     }
+-    const beforeSha = sha256File(fullPath);
+     writeTextFileAtomic(fullPath, content.replace(replacement.oldText, replacement.newText));
+@@ -686,6 +813,10 @@ async function applyPatches(patches, cwd) {
+       continue;
+     }
+     const beforeSha = sha256File(targetPath);
++    if (patch.expectedSha && patch.expectedSha !== beforeSha) {
++      results.push({ cmd: label, output: `SHA256 mismatch; expected ${patch.expectedSha} actual ${beforeSha}.`, status: 2 });
++      continue;
++    }
+     const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'pseudo-codex-patch-'));
+@@ -786,6 +917,11 @@ async function main() {
+     process.exit(1);
+   }
+ 
++  if (args.executionMode === 'github_direct') {
++    await runGithubDirect(args);
++    return;
++  }
++
+   console.log(`\nTask : ${args.task}`);
+@@ -1194,7 +1330,18 @@ async function main() {
+ 
+ }
+ 
+-main().catch(async err => {
++async function handleFatalError(err) {
+   const args = parseArgs(process.argv.slice(2));
+   await reportResult(args, {
+@@ -1209,4 +1356,19 @@ main().catch(async err => {
+   });
+   console.error(err);
+   process.exit(1);
+-});
++}
++
++if (require.main === module) {
++  main().catch(handleFatalError);
++}
++
++module.exports = {
++  buildGithubDirectPrompt,
++  commandValidationError,
++  parseActionTarget,
++  parseEditBlocks,
++  parseGithubCompletion,
++  parsePatchBlocks,
++  parseReplaceBlocks,
++};
+diff --git a/package.json b/package.json
+index 0000000..0000000 100644
+--- a/package.json
++++ b/package.json
+@@ -10,7 +10,7 @@
+     "start": "node app.js",
+     "check": "npm run check:console && npm run check:agent",
+     "check:console": "node check.js",
+-    "check:agent": "node tests/agent-no-sha.check.js && node tests/agent-controller.check.js && node tests/chatgpt-parallel.check.js && node tests/settings-details.check.js",
++    "check:agent": "node tests/agent-no-sha.check.js && node tests/agent-controller.check.js && node tests/chatgpt-parallel.check.js && node tests/settings-details.check.js && node tests/agent-github-direct.check.js",
+     "check:syntax": "node --check app.js && node --check agent/agent.js && node --check agent/chatgpt.js && node --check agent/fake-browser-client.js && node --check agent/mcp-server.js"
+   },
+diff --git a/tests/agent-github-direct.check.js b/tests/agent-github-direct.check.js
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/tests/agent-github-direct.check.js
+@@ -0,0 +1,75 @@
++"use strict";
++
++const assert = require("node:assert/strict");
++const agent = require("../agent/agent.js");
++
++const sha = "a".repeat(64);
++const edits = agent.parseEditBlocks([
++  "===EDIT: app.js SHA256:" + sha + "===",
++  "===OLD===",
++  "before",
++  "===NEW===",
++  "after",
++  "===ENDEDIT==="
++].join("\n"));
++assert.equal(edits.length, 1);
++assert.equal(edits[0].path, "app.js");
++assert.equal(edits[0].expectedSha, sha);
++
++const patches = agent.parsePatchBlocks([
++  "===PATCH SHA256:" + sha + "===",
++  "--- a/app.js",
++  "+++ b/app.js",
++  "@@ -1 +1 @@",
++  "-before",
++  "+after",
++  "===ENDPATCH==="
++].join("\n"));
++assert.equal(patches.length, 1);
++assert.equal(patches[0].expectedSha, sha);
++
++assert.match(
++  agent.commandValidationError("python3 -c 'from pathlib import Path; Path(\"app.js\").write_text(\"x\")'"),
++  /Refused direct file mutation/
++);
++assert.match(
++  agent.commandValidationError("sed -i 's/a/b/' app.js"),
++  /Refused direct file mutation/
++);
++
++const result = {
++  repository: "mrtyswin/pseudo-codex-console",
++  branch: "chatgpt-job/example",
++  baseBranch: "main",
++  commitSha: "b".repeat(40),
++  pullRequestUrl: "https://github.com/mrtyswin/pseudo-codex-console/pull/123",
++  changedFiles: ["app.js"],
++  summary: "done"
++};
++const response = [
++  "===GITHUB_COMPLETE===",
++  JSON.stringify(result),
++  "===END_GITHUB_COMPLETE==="
++].join("\n");
++assert.deepEqual(agent.parseGithubCompletion(response), result);
++
++const prompt = agent.buildGithubDirectPrompt({
++  githubRepository: result.repository,
++  githubBaseBranch: result.baseBranch,
++  githubBranch: result.branch,
++  task: "change the UI"
++});
++assert.match(prompt, /Use the connected GitHub tool/);
++assert.match(prompt, /Do not output RUN, PATCH, EDIT/);
++assert.match(prompt, /Required working branch: chatgpt-job\/example/);
++
++console.log("AGENT_GITHUB_DIRECT_PROTOCOL_OK");
