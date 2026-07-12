@@ -377,4 +377,3 @@ index 0000000..0000000
 +assert.match(prompt, /Required working branch: chatgpt-job\/example/);
 +
 +console.log("AGENT_GITHUB_DIRECT_PROTOCOL_OK");
- 

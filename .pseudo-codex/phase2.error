@@ -1,1 +1,2 @@
-error: corrupt patch at .pseudo-codex/phase2.patch:380
+error: patch failed: agent/agent.js:44
+error: agent/agent.js: patch does not apply
