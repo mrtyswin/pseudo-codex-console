@@ -50,17 +50,26 @@ jobs:
               output.pop()
           path.write_text('\n'.join(output) + '\n', encoding='utf-8')
           PY
-            if ! git apply --check --recount .pseudo-codex/phase2.patch 2>.pseudo-codex/phase2.error; then
-              git config user.name "Pseudo Codex GitHub Direct"
-              git config user.email "pseudo-codex@example.invalid"
-              git add .pseudo-codex/phase2.error .pseudo-codex/phase2.patch
-              git commit -m "Record normalized GitHub-direct patch failure"
-              git push origin HEAD:${{ github.head_ref }}
-              echo 'applied=false' >> "$GITHUB_OUTPUT"
-              exit 0
+            apply_method='git'
+            if ! git apply --check --recount .pseudo-codex/phase2.patch 2>.pseudo-codex/git-apply.error; then
+              apply_method='patch'
+              if ! patch --dry-run --batch --forward --fuzz=3 -p1 < .pseudo-codex/phase2.patch 2>.pseudo-codex/patch.error; then
+                cat .pseudo-codex/git-apply.error .pseudo-codex/patch.error > .pseudo-codex/phase2.error
+                git config user.name "Pseudo Codex GitHub Direct"
+                git config user.email "pseudo-codex@example.invalid"
+                git add .pseudo-codex/phase2.error .pseudo-codex/phase2.patch
+                git commit -m "Record GitHub-direct patch failure"
+                git push origin HEAD:${{ github.head_ref }}
+                echo 'applied=false' >> "$GITHUB_OUTPUT"
+                exit 0
+              fi
             fi
-            rm -f .pseudo-codex/phase2.error
-            git apply --recount .pseudo-codex/phase2.patch
+            rm -f .pseudo-codex/phase2.error .pseudo-codex/git-apply.error .pseudo-codex/patch.error
+            if [ "$apply_method" = 'git' ]; then
+              git apply --recount .pseudo-codex/phase2.patch
+            else
+              patch --batch --forward --fuzz=3 -p1 < .pseudo-codex/phase2.patch
+            fi
             rm .pseudo-codex/phase2.patch
             rm -f .pseudo-codex/phase2.trigger .github/workflows/apply-github-direct-agent.yml
             changed=1
