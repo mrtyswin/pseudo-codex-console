@@ -1,0 +1,156 @@
++                        project_config,
++                    )
++                else:
++                    publish_ok, publish_output = publish_git_changes(
++                        job, git_context, project_config
++                    )
+                 if publish_ok:
+-                    deploy_ok, deploy_output = run_auto_deploy(job, source_workspace, session_id, process.pid)
++                    deploy_ok, deploy_output = run_auto_deploy(
++                        job, source_workspace, session_id, process.pid, project_config
++                    )
+@@ -891,8 +1121,9 @@ def project_allows_parallel(project: str) -> bool:
+-    git_config = PROJECT_CONFIGS.get(project, {}).get("git", {})
++    config = refresh_project_configs().get(project, {})
++    git_config = config.get("git", {})
+     return isinstance(git_config, dict) and bool(git_config.get("enabled", False))
+@@ -925,6 +1156,7 @@ def main() -> int:
+                 if len(active) >= MAX_WORKERS:
+                     time.sleep(0.5)
+                     continue
++                refresh_project_configs()
+ diff --git a/.github/workflows/test.yml b/.github/workflows/test.yml
+ index aeaf5a9..0000000 100644
+ --- a/.github/workflows/test.yml
+ +++ b/.github/workflows/test.yml
+ @@ -21,4 +21,5 @@ jobs:
+       - run: npm run check
+       - run: python3 -m py_compile dispatcher/dispatcher.py scripts/chatgpt-compose.py scripts/chatgpt-compose-bridge.py
+       - run: python3 tests/dispatcher-git.check.py
++      - run: python3 tests/dispatcher-github-direct.check.py
+       - run: python3 tests/dispatcher-parallel.check.py
+ diff --git a/tests/dispatcher-github-direct.check.py b/tests/dispatcher-github-direct.check.py
+ new file mode 100755
+ index 0000000..0000000
+ --- /dev/null
+ +++ b/tests/dispatcher-github-direct.check.py
+ @@ -0,0 +1,123 @@
++#!/usr/bin/env python3
++from __future__ import annotations
++
++import importlib.util
++import json
++import os
++from pathlib import Path
++import shutil
++import subprocess
++import tempfile
++
++
++def git(cwd: Path, *args: str) -> str:
++    result = subprocess.run(
++        ["git", "-C", str(cwd), *args],
++        text=True,
++        encoding="utf-8",
++        errors="replace",
++        capture_output=True,
++        check=False,
++    )
++    if result.returncode != 0:
++        raise RuntimeError((result.stdout or "") + (result.stderr or ""))
++    return result.stdout.strip()
++
++
++def main() -> None:
++    root = Path(tempfile.mkdtemp(prefix="pseudo-codex-github-direct-"))
++    try:
++        projects = root / "projects"
++        source = projects / "request-console"
++        author = root / "author"
++        remote = root / "remote.git"
++        state = root / "state"
++        source.mkdir(parents=True)
++        subprocess.run(["git", "init", "--bare", str(remote)], check=True, capture_output=True)
++        git(source, "init", "-b", "main")
++        git(source, "config", "user.name", "Pseudo Codex Test")
++        git(source, "config", "user.email", "pseudo-codex@example.invalid")
++        (source / "app.js").write_text("module.exports = 'before';\n", encoding="utf-8")
++        git(source, "add", "app.js")
++        git(source, "commit", "-m", "initial")
++        git(source, "remote", "add", "origin", str(remote))
++        git(source, "push", "-u", "origin", "main")
++
++        subprocess.run(["git", "clone", str(remote), str(author)], check=True, capture_output=True)
++        git(author, "config", "user.name", "GitHub Direct Test")
++        git(author, "config", "user.email", "github-direct@example.invalid")
++        git(author, "switch", "-c", "chatgpt-job/direct-check")
++        (author / "app.js").write_text("module.exports = 'after';\n", encoding="utf-8")
++        git(author, "add", "app.js")
++        git(author, "commit", "-m", "direct change")
++        commit_sha = git(author, "rev-parse", "HEAD")
++        git(author, "push", "-u", "origin", "chatgpt-job/direct-check")
++
++        config_path = root / "projects.json"
++        config = {
++            "request-console": {
++                "workspace": str(source),
++                "requiresDeployment": False,
++                "executionMode": "github_direct",
++                "git": {
++                    "enabled": True,
++                    "repository": "example/request-console",
++                    "remote": "origin",
++                    "baseBranch": "main",
++                    "branchPrefix": "chatgpt-job",
++                    "push": True,
++                },
++            }
++        }
++        config_path.write_text(json.dumps(config), encoding="utf-8")
++        os.environ.update({
++            "PSEUDO_CODEX_PROJECT_ROOT": str(projects),
++            "PSEUDO_CODEX_PROJECT_CONFIG": str(config_path),
++            "PSEUDO_CODEX_STATE_DIR": str(state),
++        })
++
++        dispatcher_path = Path(__file__).parent.parent / "dispatcher" / "dispatcher.py"
++        spec = importlib.util.spec_from_file_location("dispatcher_github_direct_check", dispatcher_path)
++        if spec is None or spec.loader is None:
++            raise RuntimeError("cannot load dispatcher")
++        dispatcher = importlib.util.module_from_spec(spec)
++        spec.loader.exec_module(dispatcher)
++
++        job = {"id": "direct-check", "project": "request-console", "title": "direct"}
++        cwd, context = dispatcher.prepare_job_workspace(job, source.resolve(), config["request-console"])
++        assert cwd == source.resolve()
++        assert context and context["mode"] == "github_direct"
++        output = "\n".join([
++            "===GITHUB_COMPLETE===",
++            json.dumps({
++                "repository": "example/request-console",
++                "branch": "chatgpt-job/direct-check",
++                "baseBranch": "main",
++                "commitSha": commit_sha,
++                "pullRequestUrl": "https://github.com/example/request-console/pull/1",
++                "changedFiles": ["app.js"],
++                "summary": "done",
++            }),
++            "===END_GITHUB_COMPLETE===",
++        ])
++        ok, detail = dispatcher.publish_github_direct_changes(
++            job, context, output, config["request-console"]
++        )
++        if not ok:
++            raise AssertionError(detail)
++        if git(source, "rev-parse", "HEAD") != commit_sha:
++            raise AssertionError("source workspace did not fast-forward")
++        if git(remote, "rev-parse", "main") != commit_sha:
++            raise AssertionError("remote main did not fast-forward")
++        dispatcher.cleanup_git_worktree(context)
++        print("DISPATCHER_GITHUB_DIRECT_OK")
++    finally:
++        shutil.rmtree(root, ignore_errors=True)
++
++
++if __name__ == "__main__":
++    main()
