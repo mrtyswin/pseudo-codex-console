@@ -1,1 +1,1 @@
-trigger-dispatcher-apply
+trigger-persist-verify-log
