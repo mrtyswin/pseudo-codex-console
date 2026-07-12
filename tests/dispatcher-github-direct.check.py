@@ -46,7 +46,7 @@ def main() -> None:
         subprocess.run(["git", "clone", str(remote), str(author)], check=True, capture_output=True)
         git(author, "config", "user.name", "GitHub Direct Test")
         git(author, "config", "user.email", "github-direct@example.invalid")
-        git(author, "switch", "-c", "chatgpt-job/direct-check")
+        git(author, "switch", "-c", "chatgpt-job/direct-check", "origin/main")
         (author / "app.js").write_text("module.exports = 'after';\n", encoding="utf-8")
         git(author, "add", "app.js")
         git(author, "commit", "-m", "direct change")
