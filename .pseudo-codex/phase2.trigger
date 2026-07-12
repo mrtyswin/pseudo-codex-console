@@ -1,1 +1,1 @@
-trigger-full-hunk-recount
+trigger-complete-diagnostics
