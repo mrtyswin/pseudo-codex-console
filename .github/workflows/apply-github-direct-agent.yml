@@ -1,0 +1,36 @@
+name: apply-github-direct-agent
+
+on:
+  push:
+    branches:
+      - feature/github-direct-console
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: ${{ !contains(github.event.head_commit.message, '[generated-agent-applied]') }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feature/github-direct-console
+          fetch-depth: 0
+      - name: Apply generated patch
+        run: |
+          git apply --check --recount .pseudo-codex/phase2.patch
+          git apply --recount .pseudo-codex/phase2.patch
+          rm .pseudo-codex/phase2.patch
+          rm .github/workflows/apply-github-direct-agent.yml
+      - name: Verify
+        run: |
+          npm run check:syntax
+          npm run check
+      - name: Commit generated changes
+        run: |
+          git config user.name "Pseudo Codex GitHub Direct"
+          git config user.email "pseudo-codex@example.invalid"
+          git add -A
+          git commit -m "Add GitHub-direct agent mode and deterministic edit protocol [generated-agent-applied]"
+          git push origin HEAD:feature/github-direct-console
