@@ -940,7 +940,7 @@ function historyText(entries) {
 
 function historyState(jobId) {
   if (!historyStates.has(jobId)) {
-    historyStates.set(jobId, {paused: false, text: '', scrollTop: 0, status: ''});
+    historyStates.set(jobId, {paused: false, text: '', scrollTop: 0, status: '', autoScrolling: false});
   }
   return historyStates.get(jobId);
 }
@@ -1041,15 +1041,28 @@ function userIsReading(card) {
   return Boolean(selection && !selection.isCollapsed && selection.anchorNode && card.contains(selection.anchorNode));
 }
 
+function scrollHistoryToBottom(detailsNode, state) {
+  var log = detailsNode.querySelector('.history-log');
+  if (!log) return;
+  state.autoScrolling = true;
+  requestAnimationFrame(function () {
+    log.scrollTop = log.scrollHeight;
+    state.scrollTop = log.scrollTop;
+    setTimeout(function () { state.autoScrolling = false; }, 100);
+  });
+}
+
 function restoreCard(card) {
   var history = card.querySelector('details.history-details');
   if (!history) return;
   var state = historyState(history.dataset.historyJobId);
   var log = history.querySelector('.history-log');
-  if (log) requestAnimationFrame(function () {
-    log.scrollTop = state.paused ? state.scrollTop : log.scrollHeight;
-    state.scrollTop = log.scrollTop;
-  });
+  if (!log) return;
+  if (state.paused) {
+    requestAnimationFrame(function () { log.scrollTop = state.scrollTop; });
+    return;
+  }
+  scrollHistoryToBottom(history, state);
 }
 
 function applyFilters() {
@@ -1087,7 +1100,6 @@ async function refreshJobs() {
         wrapper.innerHTML = renderJob(job);
         var fresh = wrapper.firstElementChild;
         existing.replaceWith(fresh);
-        restoreCard(fresh);
         existing = fresh;
       } else if (!existing) {
         var holder = document.createElement('div');
@@ -1095,8 +1107,8 @@ async function refreshJobs() {
         existing = holder.firstElementChild;
         var reference = container.children[index] || null;
         container.insertBefore(existing, reference);
-        restoreCard(existing);
       }
+      if (existing) restoreCard(existing);
     });
     applyFilters();
   } catch (_error) {
@@ -1127,20 +1139,15 @@ document.addEventListener('toggle', function (event) {
     detailStates.set(node.dataset.detailKey, node.open);
     if (node.open && node.matches('details.history-details')) {
       var state = historyState(node.dataset.historyJobId);
-      var log = node.querySelector('.history-log');
-      if (log && !state.paused) {
-        requestAnimationFrame(function () {
-          log.scrollTop = log.scrollHeight;
-          state.scrollTop = log.scrollTop;
-        });
-      }
+      if (!state.paused) scrollHistoryToBottom(node, state);
     }
   }
 }, true);
 
 document.addEventListener('pointerdown', function (event) {
-  var detailsNode = event.target.closest && event.target.closest('details.history-details');
-  if (!detailsNode) return;
+  var log = event.target.closest && event.target.closest('.history-log');
+  if (!log) return;
+  var detailsNode = log.closest('details.history-details');
   var state = historyState(detailsNode.dataset.historyJobId);
   state.paused = true;
   state.status = '更新停止中';
@@ -1151,8 +1158,9 @@ document.addEventListener('scroll', function (event) {
   if (!log) return;
   var detailsNode = log.closest('details.history-details');
   var state = historyState(detailsNode.dataset.historyJobId);
-  state.paused = true;
   state.scrollTop = log.scrollTop;
+  if (state.autoScrolling) return;
+  state.paused = true;
   state.status = '更新停止中';
 }, true);
 
@@ -1184,6 +1192,7 @@ document.addEventListener('click', async function (event) {
     if (historyButton.dataset.historyAction === 'latest') {
       state.paused = false;
       state.status = '';
+      scrollHistoryToBottom(historyNode, state);
       await refreshJobs();
     } else if (historyButton.dataset.historyAction === 'pause') {
       state.paused = true;
