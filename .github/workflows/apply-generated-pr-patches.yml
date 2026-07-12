@@ -16,39 +16,37 @@ jobs:
         with:
           ref: ${{ github.head_ref }}
           fetch-depth: 0
-      - name: Apply pending generated agent patch
+      - name: Apply pending dispatcher patch
         id: apply
         run: |
           changed=0
-          if [ -f .pseudo-codex/phase2.patch ]; then
+          if [ -f .pseudo-codex/phase3.part.0 ]; then
+            cat .pseudo-codex/phase3.part.* > .pseudo-codex/phase3.patch
             python3 - <<'PY'
           from pathlib import Path
           import re
 
-          path = Path('.pseudo-codex/phase2.patch')
+          path = Path('.pseudo-codex/phase3.patch')
           source = path.read_text(encoding='utf-8').replace('\r\n', '\n').split('\n')
-          package_index = next(
-              (i for i, line in enumerate(source) if line == 'diff --git a/package.json b/package.json'),
-              len(source),
-          )
-          source = source[:package_index]
           normalized = []
           in_hunk = False
-          for line in source:
-              if line.startswith('index '):
+          controls = ('diff --git ', '--- ', '+++ ', 'new file mode ', 'deleted file mode ', '@@ ')
+          for raw in source:
+              stripped = raw.lstrip()
+              if stripped.startswith('index '):
                   continue
-              if 'const BROWSER_SERVICE = os.environ.get' in line:
-                  line = ' const CHATGPT_REQUEST_TIMEOUT_MS = Number.parseInt('
-              if line.startswith('@@'):
+              if stripped.startswith(controls):
+                  raw = stripped
+              if raw.startswith('@@ '):
                   in_hunk = True
-              elif line.startswith(('diff --git ', '--- ', '+++ ')):
+              elif raw.startswith(('diff --git ', '--- ', '+++ ', 'new file mode ', 'deleted file mode ')):
                   in_hunk = False
               elif in_hunk:
-                  if line == '':
-                      line = ' '
-                  elif line[0] not in ' +-\\':
-                      line = ' ' + line
-              normalized.append(line)
+                  if raw == '':
+                      raw = ' '
+                  elif raw[0] not in ' +-\\':
+                      raw = ' ' + raw
+              normalized.append(raw)
           while normalized and normalized[-1] == ' ':
               normalized.pop()
 
@@ -81,19 +79,17 @@ jobs:
               )
           path.write_text('\n'.join(output) + '\n', encoding='utf-8')
           PY
-            if ! patch --dry-run --batch --forward --fuzz=3 -p1 < .pseudo-codex/phase2.patch >.pseudo-codex/patch.error 2>&1; then
-              cp .pseudo-codex/patch.error .pseudo-codex/phase2.error
+            if ! patch --dry-run --batch --forward --fuzz=3 -p1 < .pseudo-codex/phase3.patch >.pseudo-codex/phase3.error 2>&1; then
               git config user.name "Pseudo Codex GitHub Direct"
               git config user.email "pseudo-codex@example.invalid"
-              git add .pseudo-codex/phase2.error .pseudo-codex/phase2.patch
-              git commit -m "Record GitHub-direct agent patch failure"
+              git add .pseudo-codex/phase3.error .pseudo-codex/phase3.patch
+              git commit -m "Record dispatcher patch failure"
               git push origin HEAD:${{ github.head_ref }}
               echo 'applied=false' >> "$GITHUB_OUTPUT"
               exit 0
             fi
-            patch --batch --forward --fuzz=3 -p1 < .pseudo-codex/phase2.patch
-            rm -f .pseudo-codex/phase2.patch .pseudo-codex/phase2.error .pseudo-codex/patch.error
-            rm -f .pseudo-codex/phase2.trigger .github/workflows/apply-github-direct-agent.yml
+            patch --batch --forward --fuzz=3 -p1 < .pseudo-codex/phase3.patch
+            rm -f .pseudo-codex/phase3.part.* .pseudo-codex/phase3.patch .pseudo-codex/phase3.error .pseudo-codex/phase3.trigger
             changed=1
           fi
           echo "applied=$changed" >> "$GITHUB_OUTPUT"
@@ -102,11 +98,15 @@ jobs:
         run: |
           npm run check:syntax
           npm run check
+          python3 -m py_compile dispatcher/dispatcher.py
+          python3 tests/dispatcher-git.check.py
+          python3 tests/dispatcher-github-direct.check.py
+          python3 tests/dispatcher-parallel.check.py
       - name: Commit generated changes
         if: steps.apply.outputs.applied == '1'
         run: |
           git config user.name "Pseudo Codex GitHub Direct"
           git config user.email "pseudo-codex@example.invalid"
           git add -A
-          git commit -m "Apply GitHub-direct agent implementation"
+          git commit -m "Implement GitHub-direct dispatcher and dynamic project configuration"
           git push origin HEAD:${{ github.head_ref }}
