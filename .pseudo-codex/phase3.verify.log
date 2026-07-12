@@ -14,7 +14,7 @@ $ npm run check
 > pseudo-codex-console@0.1.0 check:console
 > node check.js
 
-REQUEST_CONSOLE_ISOLATED_REGRESSION_OK a5adb8b0-bb80-407f-a342-f21d34f25594
+REQUEST_CONSOLE_ISOLATED_REGRESSION_OK 3971185a-9f2e-489b-9cad-0a83f0037398
 
 > pseudo-codex-console@0.1.0 check:agent
 > node tests/agent-no-sha.check.js && node tests/agent-controller.check.js && node tests/chatgpt-parallel.check.js && node tests/settings-details.check.js && node tests/agent-github-direct.check.js
@@ -31,10 +31,7 @@ $ python3 tests/dispatcher-git.check.py
 DISPATCHER_GIT_MAIN_SYNC_OK
 
 $ python3 tests/dispatcher-github-direct.check.py
-Traceback (most recent call last):
-  File "/home/runner/work/pseudo-codex-console/pseudo-codex-console/tests/dispatcher-github-direct.check.py", line 119, in <module>
-    main()
-  File "/home/runner/work/pseudo-codex-console/pseudo-codex-console/tests/dispatcher-github-direct.check.py", line 107, in main
-    raise AssertionError(detail)
-AssertionError: GITHUB_BRANCH_STALE_OR_DIVERGED
-VERIFY_STATUS=1
+DISPATCHER_GITHUB_DIRECT_OK
+
+$ python3 tests/dispatcher-parallel.check.py
+DISPATCHER_PARALLEL_POOL_OK
