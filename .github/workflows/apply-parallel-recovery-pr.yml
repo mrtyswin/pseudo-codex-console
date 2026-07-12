@@ -139,6 +139,15 @@ jobs:
               1,
           )
           chat.write_text(text, encoding='utf-8')
+
+          parallel_test = Path('tests/chatgpt-parallel.check.js')
+          text = parallel_test.read_text(encoding='utf-8')
+          text = text.replace(
+              '  assert.ok(a2.startsWith(aConversation + ":A2"));',
+              '  console.log("PARALLEL_DEBUG", JSON.stringify({a1, b1, a2, b2, aConversation, bConversation}));\n  assert.ok(a2.startsWith(aConversation + ":A2"));',
+              1,
+          )
+          parallel_test.write_text(text, encoding='utf-8')
           PY
       - if: steps.apply.outcome == 'success'
         run: npm run check:syntax
