@@ -16,7 +16,7 @@ jobs:
         with:
           ref: ${{ github.head_ref }}
           fetch-depth: 0
-      - name: Apply pending generated patches
+      - name: Apply pending generated agent patch
         id: apply
         run: |
           changed=0
@@ -27,16 +27,21 @@ jobs:
 
           path = Path('.pseudo-codex/phase2.patch')
           source = path.read_text(encoding='utf-8').replace('\r\n', '\n').split('\n')
+          package_index = next(
+              (i for i, line in enumerate(source) if line == 'diff --git a/package.json b/package.json'),
+              len(source),
+          )
+          source = source[:package_index]
           normalized = []
           in_hunk = False
           for line in source:
-              if line.startswith('index 4749d0d..0000000 100755'):
-                  line = 'index 4749d0d..0000000 100644'
+              if line.startswith('index '):
+                  continue
               if 'const BROWSER_SERVICE = os.environ.get' in line:
                   line = ' const CHATGPT_REQUEST_TIMEOUT_MS = Number.parseInt('
               if line.startswith('@@'):
                   in_hunk = True
-              elif line.startswith(('diff --git ', '--- ', '+++ ', 'index ')):
+              elif line.startswith(('diff --git ', '--- ', '+++ ')):
                   in_hunk = False
               elif in_hunk:
                   if line == '':
@@ -76,27 +81,18 @@ jobs:
               )
           path.write_text('\n'.join(output) + '\n', encoding='utf-8')
           PY
-            apply_method='git'
-            if ! git apply --check --recount .pseudo-codex/phase2.patch 2>.pseudo-codex/git-apply.error; then
-              apply_method='patch'
-              if ! patch --dry-run --batch --forward --fuzz=3 -p1 < .pseudo-codex/phase2.patch >.pseudo-codex/patch.error 2>&1; then
-                cat .pseudo-codex/git-apply.error .pseudo-codex/patch.error > .pseudo-codex/phase2.error
-                git config user.name "Pseudo Codex GitHub Direct"
-                git config user.email "pseudo-codex@example.invalid"
-                git add .pseudo-codex/phase2.error .pseudo-codex/phase2.patch
-                git commit -m "Record GitHub-direct patch failure"
-                git push origin HEAD:${{ github.head_ref }}
-                echo 'applied=false' >> "$GITHUB_OUTPUT"
-                exit 0
-              fi
+            if ! patch --dry-run --batch --forward --fuzz=3 -p1 < .pseudo-codex/phase2.patch >.pseudo-codex/patch.error 2>&1; then
+              cp .pseudo-codex/patch.error .pseudo-codex/phase2.error
+              git config user.name "Pseudo Codex GitHub Direct"
+              git config user.email "pseudo-codex@example.invalid"
+              git add .pseudo-codex/phase2.error .pseudo-codex/phase2.patch
+              git commit -m "Record GitHub-direct agent patch failure"
+              git push origin HEAD:${{ github.head_ref }}
+              echo 'applied=false' >> "$GITHUB_OUTPUT"
+              exit 0
             fi
-            rm -f .pseudo-codex/phase2.error .pseudo-codex/git-apply.error .pseudo-codex/patch.error
-            if [ "$apply_method" = 'git' ]; then
-              git apply --recount .pseudo-codex/phase2.patch
-            else
-              patch --batch --forward --fuzz=3 -p1 < .pseudo-codex/phase2.patch
-            fi
-            rm .pseudo-codex/phase2.patch
+            patch --batch --forward --fuzz=3 -p1 < .pseudo-codex/phase2.patch
+            rm -f .pseudo-codex/phase2.patch .pseudo-codex/phase2.error .pseudo-codex/patch.error
             rm -f .pseudo-codex/phase2.trigger .github/workflows/apply-github-direct-agent.yml
             changed=1
           fi
