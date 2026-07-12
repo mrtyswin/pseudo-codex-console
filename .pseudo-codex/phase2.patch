@@ -297,7 +297,7 @@ diff --git a/package.json b/package.json
 index 0000000..0000000 100644
 --- a/package.json
 +++ b/package.json
-@@ -10,7 +10,7 @@
+@@ -10,6 +10,6 @@
      "start": "node app.js",
      "check": "npm run check:console && npm run check:agent",
      "check:console": "node check.js",
