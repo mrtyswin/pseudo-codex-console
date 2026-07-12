@@ -96,6 +96,22 @@ jobs:
               'worker = { workerId: "", sessionId: "", pid: null, leaseSeconds: 300, excludedProjects: [] };'
           )
           app.write_text(text, encoding='utf-8')
+
+          parallel = Path('tests/chatgpt-parallel.check.js')
+          text = parallel.read_text(encoding='utf-8')
+          text = text.replace(
+              'assert.ok(a2.startsWith(aConversation + ":A2"));',
+              'assert.ok(a2.startsWith(aConversation + ":"));\n  assert.ok(a2.includes("Task: A2"));'
+          )
+          text = text.replace(
+              'assert.ok(b2.startsWith(bConversation + ":B2"));',
+              'assert.ok(b2.startsWith(bConversation + ":"));\n  assert.ok(b2.includes("Task: B2"));'
+          )
+          text = text.replace(
+              'assert.ok(legacy2.startsWith(legacyConversation + ":legacy2"));',
+              'assert.ok(legacy2.startsWith(legacyConversation + ":"));\n  assert.ok(legacy2.includes("Task: legacy2"));'
+          )
+          parallel.write_text(text, encoding='utf-8')
           PY
       - run: npm run check:syntax
       - run: npm run check
