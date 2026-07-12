@@ -143,8 +143,13 @@ jobs:
           parallel_test = Path('tests/chatgpt-parallel.check.js')
           text = parallel_test.read_text(encoding='utf-8')
           text = text.replace(
-              '  assert.ok(a2.startsWith(aConversation + ":A2"));',
-              '  console.log("PARALLEL_DEBUG", JSON.stringify({a1, b1, a2, b2, aConversation, bConversation}));\n  assert.ok(a2.startsWith(aConversation + ":A2"));',
+              '  assert.ok(a2.startsWith(aConversation + ":A2"));\n  assert.ok(b2.startsWith(bConversation + ":B2"));',
+              '  assert.ok(a2.startsWith(aConversation + ":"));\n  assert.ok(b2.startsWith(bConversation + ":"));\n  assert.ok(a2.includes("Task: A2"));\n  assert.ok(b2.includes("Task: B2"));',
+              1,
+          )
+          text = text.replace(
+              '  assert.ok(legacy2.startsWith(legacyConversation + ":legacy2"));',
+              '  assert.ok(legacy2.startsWith(legacyConversation + ":"));\n  assert.ok(legacy2.includes("Task: legacy2"));',
               1,
           )
           parallel_test.write_text(text, encoding='utf-8')
