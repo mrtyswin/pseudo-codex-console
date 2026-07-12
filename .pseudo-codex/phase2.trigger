@@ -1,1 +1,1 @@
-trigger-complete-diagnostics
+trigger-agent-only-apply
