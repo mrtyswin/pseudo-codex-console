@@ -310,7 +310,7 @@ new file mode 100644
 index 0000000..0000000
 --- /dev/null
 +++ b/tests/agent-github-direct.check.js
-@@ -0,0 +1,75 @@
+@@ -0,0 +1,66 @@
 +"use strict";
 +
 +const assert = require("node:assert/strict");
