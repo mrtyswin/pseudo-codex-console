@@ -66,7 +66,7 @@ jobs:
               end += 1
           if start < 0 or end >= len(lines):
               raise SystemExit('agent session assignment block bounds not found')
-          replacement = [
+          lines[start:end + 1] = [
               'agent = replace_once(',
               '    agent,',
               "    '''  if (!args.task) {''',",
@@ -76,7 +76,6 @@ jobs:
               '    "agent session key assignment",',
               ')',
           ]
-          lines[start:end + 1] = replacement
           script.write_text('\n'.join(lines) + '\n', encoding='utf-8')
           PY
           python3 scripts/apply-parallel-recovery-decoded.py >> /tmp/apply-parallel.log 2>&1
@@ -84,7 +83,7 @@ jobs:
           cat /tmp/apply-parallel.log
           cp /tmp/apply-parallel.log scripts/apply-parallel-error.log
           exit "$status"
-      - name: Commit diagnostic
+      - name: Commit apply diagnostic
         if: steps.apply.outcome == 'failure'
         run: |
           git config user.name github-actions[bot]
@@ -119,18 +118,38 @@ jobs:
           PY
       - if: steps.apply.outcome == 'success'
         run: npm run check:syntax
-      - if: steps.apply.outcome == 'success'
-        run: npm run check
-      - if: steps.apply.outcome == 'success'
+      - name: Run npm checks
+        id: npm_checks
+        if: steps.apply.outcome == 'success'
+        continue-on-error: true
+        run: |
+          set +e
+          npm run check > /tmp/npm-check.log 2>&1
+          status=$?
+          cat /tmp/npm-check.log
+          cp /tmp/npm-check.log scripts/npm-check-error.log
+          exit "$status"
+      - name: Commit npm check diagnostic
+        if: steps.npm_checks.outcome == 'failure'
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -f scripts/npm-check-error.log
+          git diff --cached --quiet || git commit -m "Record parallel recovery test failure"
+          git push origin HEAD:feature/parallel-recovery
+      - name: Stop after npm check failure
+        if: steps.npm_checks.outcome == 'failure'
+        run: exit 1
+      - if: steps.npm_checks.outcome == 'success'
         run: python3 -m py_compile dispatcher/dispatcher.py scripts/chatgpt-compose.py scripts/chatgpt-compose-bridge.py
-      - if: steps.apply.outcome == 'success'
+      - if: steps.npm_checks.outcome == 'success'
         run: python3 tests/dispatcher-git.check.py
-      - if: steps.apply.outcome == 'success'
+      - if: steps.npm_checks.outcome == 'success'
         run: python3 tests/dispatcher-parallel.check.py
-      - if: steps.apply.outcome == 'success'
+      - if: steps.npm_checks.outcome == 'success'
         run: git diff --check
       - name: Commit implementation
-        if: steps.apply.outcome == 'success'
+        if: steps.npm_checks.outcome == 'success'
         run: |
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
