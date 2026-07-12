@@ -28,6 +28,17 @@ jobs:
 
           path = Path('.pseudo-codex/phase3.patch')
           source = path.read_text(encoding='utf-8').replace('\r\n', '\n').split('\n')
+          workflow_start = next(
+              (i for i, line in enumerate(source) if line.lstrip() == 'diff --git a/.github/workflows/test.yml b/.github/workflows/test.yml'),
+              None,
+          )
+          if workflow_start is not None:
+              workflow_end = next(
+                  (i for i in range(workflow_start + 1, len(source)) if source[i].lstrip().startswith('diff --git ')),
+                  len(source),
+              )
+              source = source[:workflow_start] + source[workflow_end:]
+
           normalized = []
           in_hunk = False
           controls = ('diff --git ', '--- ', '+++ ', 'new file mode ', 'deleted file mode ', '@@ ')
