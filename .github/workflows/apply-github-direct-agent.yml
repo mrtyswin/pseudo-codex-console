@@ -17,11 +17,13 @@ jobs:
         with:
           ref: feature/github-direct-console
           fetch-depth: 0
-      - name: Apply generated patch
+      - name: Normalize and apply generated patch
         run: |
+          sed -i 's#^ const BROWSER_SERVICE = os.environ.get.*# const CHATGPT_REQUEST_TIMEOUT_MS = Number.parseInt(#' .pseudo-codex/phase2.patch
           git apply --check --recount .pseudo-codex/phase2.patch
           git apply --recount .pseudo-codex/phase2.patch
           rm .pseudo-codex/phase2.patch
+          rm -f .pseudo-codex/phase2.trigger
           rm .github/workflows/apply-github-direct-agent.yml
       - name: Verify
         run: |
