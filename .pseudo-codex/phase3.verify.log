@@ -1,0 +1,40 @@
+
+$ npm run check:syntax
+
+> pseudo-codex-console@0.1.0 check:syntax
+> node --check app.js && node --check agent/agent.js && node --check agent/chatgpt.js && node --check agent/fake-browser-client.js && node --check agent/mcp-server.js
+
+
+$ npm run check
+
+> pseudo-codex-console@0.1.0 check
+> npm run check:console && npm run check:agent
+
+
+> pseudo-codex-console@0.1.0 check:console
+> node check.js
+
+REQUEST_CONSOLE_ISOLATED_REGRESSION_OK a5adb8b0-bb80-407f-a342-f21d34f25594
+
+> pseudo-codex-console@0.1.0 check:agent
+> node tests/agent-no-sha.check.js && node tests/agent-controller.check.js && node tests/chatgpt-parallel.check.js && node tests/settings-details.check.js && node tests/agent-github-direct.check.js
+
+AGENT_NO_SHA_PROTOCOL_OK
+AGENT_CONTROLLER_RECOVERY_OK
+CHATGPT_PARALLEL_SESSIONS_OK
+SETTINGS_DETAILS_AND_CHAT_UI_OK
+AGENT_GITHUB_DIRECT_PROTOCOL_OK
+
+$ python3 -m py_compile dispatcher/dispatcher.py
+
+$ python3 tests/dispatcher-git.check.py
+DISPATCHER_GIT_MAIN_SYNC_OK
+
+$ python3 tests/dispatcher-github-direct.check.py
+Traceback (most recent call last):
+  File "/home/runner/work/pseudo-codex-console/pseudo-codex-console/tests/dispatcher-github-direct.check.py", line 119, in <module>
+    main()
+  File "/home/runner/work/pseudo-codex-console/pseudo-codex-console/tests/dispatcher-github-direct.check.py", line 107, in main
+    raise AssertionError(detail)
+AssertionError: GITHUB_BRANCH_STALE_OR_DIVERGED
+VERIFY_STATUS=1
