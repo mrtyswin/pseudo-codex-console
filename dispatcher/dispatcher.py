@@ -15,6 +15,7 @@ import signal
 import socket
 import subprocess
 import sys
+import threading
 import time
 from typing import Any
 from urllib import error, parse, request
@@ -75,6 +76,47 @@ def load_project_configs() -> dict[str, dict[str, Any]]:
 
 PROJECT_CONFIGS = load_project_configs()
 
+_PROJECT_CONFIG_LOCK = threading.Lock()
+try:
+    _PROJECT_CONFIG_MTIME_NS = PROJECT_CONFIG_PATH.stat().st_mtime_ns
+except OSError:
+    _PROJECT_CONFIG_MTIME_NS = -1
+
+
+def refresh_project_configs(force: bool = False) -> dict[str, dict[str, Any]]:
+    global _PROJECT_CONFIG_MTIME_NS
+    try:
+        modified = PROJECT_CONFIG_PATH.stat().st_mtime_ns
+    except OSError as exc:
+        logging.getLogger("pseudo-codex-dispatcher").warning(
+            "cannot stat project config; keeping last known good config: %r",
+            exc,
+        )
+        return PROJECT_CONFIGS
+    if not force and modified == _PROJECT_CONFIG_MTIME_NS:
+        return PROJECT_CONFIGS
+    try:
+        loaded = load_project_configs()
+    except RuntimeError as exc:
+        logging.getLogger("pseudo-codex-dispatcher").warning(
+            "invalid project config; keeping last known good config: %s",
+            exc,
+        )
+        return PROJECT_CONFIGS
+    with _PROJECT_CONFIG_LOCK:
+        PROJECT_CONFIGS.clear()
+        PROJECT_CONFIGS.update(loaded)
+        _PROJECT_CONFIG_MTIME_NS = modified
+    return PROJECT_CONFIGS
+
+
+def get_project_config(project: str) -> dict[str, Any]:
+    config = refresh_project_configs().get(project)
+    if not config:
+        raise ValueError(
+            f"project is not configured: {project}; add it to {PROJECT_CONFIG_PATH} before submitting jobs"
+        )
+    return json.loads(json.dumps(config))
 
 def configure_logging() -> logging.Logger:
     STATE_DIR.mkdir(parents=True, exist_ok=True)
@@ -128,14 +170,10 @@ def job_session_path(job_id: str) -> Path:
     return session_path
 
 
-def project_path(project: str) -> Path:
+def project_path(project: str, project_config: dict[str, Any] | None = None) -> Path:
     if not PROJECT_PATTERN.fullmatch(project):
         raise ValueError("project must be a lowercase slug")
-    config = PROJECT_CONFIGS.get(project)
-    if not config:
-        raise ValueError(
-            f"project is not configured: {project}; add it to {PROJECT_CONFIG_PATH} before submitting jobs"
-        )
+    config = project_config or get_project_config(project)
     candidate = Path(str(config["workspace"])).resolve()
     try:
         candidate.relative_to(PROJECT_ROOT)
@@ -244,9 +282,17 @@ def sync_primary_workspace(
     return True, f"UBUNTU_SYNC_OK commit={actual_commit}"
 
 
-def prepare_job_workspace(job: dict[str, Any], source_workspace: Path) -> tuple[Path, dict[str, Any] | None]:
+def prepare_job_workspace(
+    job: dict[str, Any],
+    source_workspace: Path,
+    project_config: dict[str, Any] | None = None,
+) -> tuple[Path, dict[str, Any] | None]:
     project_name = str(job["project"])
-    git_config = PROJECT_CONFIGS[project_name].get("git", {})
+    config = project_config or get_project_config(project_name)
+    execution_mode = str(config.get("executionMode", "local"))
+    if execution_mode == "verify_only":
+        return source_workspace, None
+    git_config = config.get("git", {})
     if not isinstance(git_config, dict) or not git_config.get("enabled", False):
         return source_workspace, None
 
@@ -258,6 +304,23 @@ def prepare_job_workspace(job: dict[str, Any], source_workspace: Path) -> tuple[
     base_branch = str(git_config.get("baseBranch", "main"))
     branch_prefix = re.sub(r"[^a-zA-Z0-9._/-]+", "-", str(git_config.get("branchPrefix", "chatgpt-job"))).strip("-/")
     branch = f"{branch_prefix}/{job['id']}"
+    execution_mode = str(config.get("executionMode", "local"))
+    if execution_mode == "github_direct":
+        repository = str(git_config.get("repository", "")).strip()
+        if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repository):
+            raise RuntimeError("GitHub direct mode requires git.repository in owner/repository format")
+        if not git_config.get("push", False):
+            raise RuntimeError("GitHub direct mode requires git.push=true")
+        return source_workspace, {
+            "mode": "github_direct",
+            "source": source_workspace,
+            "branch": branch,
+            "remote": remote,
+            "baseBranch": base_branch,
+            "repository": repository,
+            "push": True,
+        }
+
     worktree = STATE_DIR / "worktrees" / project_name / str(job["id"])
     worktree.parent.mkdir(parents=True, exist_ok=True)
 
@@ -269,6 +332,7 @@ def prepare_job_workspace(job: dict[str, Any], source_workspace: Path) -> tuple[
             "remote": remote,
             "baseBranch": base_branch,
             "push": bool(git_config.get("push", False)),
+            "mode": "local",
         }
     if worktree.exists():
         raise RuntimeError(f"Git worktree path already exists but is invalid: {worktree}")
@@ -290,12 +354,17 @@ def prepare_job_workspace(job: dict[str, Any], source_workspace: Path) -> tuple[
         "remote": remote,
         "baseBranch": base_branch,
         "push": bool(git_config.get("push", False)),
+        "mode": "local",
     }
 
 
-def publish_git_changes(job: dict[str, Any], context: dict[str, Any] | None) -> tuple[bool, str]:
+def publish_git_changes(
+    job: dict[str, Any],
+    context: dict[str, Any] | None,
+    project_config: dict[str, Any] | None = None,
+) -> tuple[bool, str]:
     project_name = str(job.get("project", ""))
-    project_config = PROJECT_CONFIGS.get(project_name, {})
+    project_config = project_config or get_project_config(project_name)
     if context is None:
         if project_config.get("requiresDeployment", False):
             return False, "GIT_PUBLISH_NOT_CONFIGURED"
@@ -368,6 +437,131 @@ def publish_git_changes(job: dict[str, Any], context: dict[str, Any] | None) -> 
     )
 
 
+def parse_github_completion(output: str) -> dict[str, Any]:
+    match = re.search(
+        r"===GITHUB_COMPLETE===\s*(\{.*?\})\s*===END_GITHUB_COMPLETE===",
+        output,
+        re.DOTALL,
+    )
+    if not match:
+        raise RuntimeError("GITHUB_COMPLETE_RESULT_MISSING")
+    try:
+        value = json.loads(match.group(1))
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"GITHUB_COMPLETE_RESULT_INVALID: {exc}") from exc
+    if not isinstance(value, dict):
+        raise RuntimeError("GITHUB_COMPLETE_RESULT_INVALID")
+    return value
+
+
+def publish_github_direct_changes(
+    job: dict[str, Any],
+    context: dict[str, Any],
+    output: str,
+    project_config: dict[str, Any],
+) -> tuple[bool, str]:
+    try:
+        result = parse_github_completion(output)
+    except RuntimeError as exc:
+        return False, str(exc)
+
+    repository = str(result.get("repository", ""))
+    branch = str(result.get("branch", ""))
+    base_branch = str(result.get("baseBranch", ""))
+    commit_sha = str(result.get("commitSha", ""))
+    pull_request_url = str(result.get("pullRequestUrl", ""))
+    changed_files = [str(item) for item in result.get("changedFiles", []) if isinstance(item, str)]
+    expected_branch = str(context["branch"])
+    expected_pr_prefix = f"https://github.com/{repository}/pull/"
+    sensitive_path = re.compile(
+        r"(^|/)(?:\.env(?:\.|$)|id_[rd]sa(?:\.|$)|.*\.(?:pem|key|p12|pfx)|credentials(?:\.|$)|secrets?(?:\.|$))",
+        re.IGNORECASE,
+    )
+    if (
+        repository != str(context["repository"])
+        or branch != expected_branch
+        or base_branch != str(context["baseBranch"])
+        or not re.fullmatch(r"[0-9a-fA-F]{40}", commit_sha)
+        or not pull_request_url.startswith(expected_pr_prefix)
+        or any(sensitive_path.search(path) for path in changed_files)
+    ):
+        return False, "GITHUB_COMPLETE_RESULT_MISMATCH_OR_SENSITIVE_PATH"
+
+    source = Path(context["source"])
+    remote = str(context["remote"])
+    ready, ready_output = validate_primary_workspace(source, base_branch)
+    if not ready:
+        return False, ready_output
+
+    fetch = run_git(
+        source,
+        ["fetch", "--prune", remote, base_branch, f"{branch}:refs/remotes/{remote}/{branch}"],
+        timeout=300,
+    )
+    if fetch.returncode != 0:
+        return False, "Cannot fetch GitHub direct branch: " + git_error(fetch)
+
+    worktree = STATE_DIR / "worktrees" / str(job["project"]) / f"{job['id']}-github"
+    worktree.parent.mkdir(parents=True, exist_ok=True)
+    if worktree.exists():
+        return False, f"GitHub validation worktree already exists: {worktree}"
+    add = run_git(
+        source,
+        ["worktree", "add", "--detach", str(worktree), f"{remote}/{branch}"],
+        timeout=300,
+    )
+    if add.returncode != 0:
+        return False, "Cannot create GitHub validation worktree: " + git_error(add)
+    context["worktree"] = worktree
+
+    actual_commit = git_head(worktree)
+    if actual_commit.lower() != commit_sha.lower():
+        return False, f"GITHUB_COMMIT_MISMATCH expected={commit_sha} actual={actual_commit}"
+    ancestor = run_git(
+        worktree,
+        ["merge-base", "--is-ancestor", f"{remote}/{base_branch}", "HEAD"],
+    )
+    if ancestor.returncode != 0:
+        return False, "GITHUB_BRANCH_STALE_OR_DIVERGED"
+
+    verify_ok, verify_output = run_publish_verification(
+        project_config,
+        worktree,
+        remote,
+        base_branch,
+    )
+    if not verify_ok:
+        return False, verify_output
+
+    main_push = run_git(worktree, ["push", remote, f"HEAD:{base_branch}"], timeout=300)
+    if main_push.returncode != 0:
+        return False, "Cannot fast-forward GitHub main: " + git_error(main_push)
+
+    sync_ok, sync_output = sync_primary_workspace(
+        source,
+        remote,
+        base_branch,
+        actual_commit,
+    )
+    if not sync_ok:
+        return False, sync_output
+
+    return True, "\n".join(
+        [
+            f"GitHub repository: {repository}",
+            f"job branch: {branch}",
+            f"job commit SHA: {actual_commit}",
+            f"pull request: {pull_request_url}",
+            f"GitHub main SHA: {actual_commit}",
+            f"Ubuntu workspace SHA: {actual_commit}",
+            "main反映結果: fast-forward",
+            "Ubuntu同期結果: ok",
+            verify_output,
+            sync_output,
+        ]
+    )
+
+
 def cleanup_git_worktree(context: dict[str, Any] | None) -> None:
     if context is None:
         return
@@ -378,9 +572,32 @@ def cleanup_git_worktree(context: dict[str, Any] | None) -> None:
         LOG.warning("could not remove completed worktree path=%s detail=%s", worktree, git_error(result))
 
 
-def task_for(job: dict[str, Any]) -> str:
+def task_for(job: dict[str, Any], project_config: dict[str, Any] | None = None) -> str:
     project_name = str(job.get("project", ""))
-    project_config = PROJECT_CONFIGS[project_name]
+    project_config = project_config or get_project_config(project_name)
+    git_config = project_config.get("git", {})
+    if project_config.get("executionMode") == "verify_only":
+        return "\n".join(
+            [
+                "Verification-only task. Do not modify files or Git state.",
+                "Run read-only inspection and the smallest relevant tests, then report the results.",
+                "Task title: " + str(job.get("title", "")),
+                "Task instruction:",
+                str(job.get("instruction", "")),
+            ]
+        )
+    if project_config.get("executionMode") == "github_direct":
+        return "\n".join(
+            [
+                "Use the connected GitHub tool to implement this task directly in the configured repository.",
+                "Create or update only the dedicated job branch and a pull request. Do not edit Ubuntu files.",
+                "Repository: " + str(git_config.get("repository", "")),
+                "Base branch: " + str(git_config.get("baseBranch", "main")),
+                "Task title: " + str(job.get("title", "")),
+                "Task instruction:",
+                str(job.get("instruction", "")),
+            ]
+        )
     lines = [
             "You are the sole implementation agent for this queued local task.",
             "Work only inside the provided project directory using the available sandbox tools.",
@@ -402,7 +619,6 @@ def task_for(job: dict[str, Any]) -> str:
             "Task instruction:",
             str(job.get("instruction", "")),
     ]
-    git_config = project_config.get("git", {})
     if isinstance(git_config, dict) and git_config.get("enabled", False):
         lines.extend(
             [
@@ -587,9 +803,15 @@ def read_log_tail(path: Path, limit: int = 200_000) -> str:
         return ""
 
 
-def run_auto_deploy(job: dict[str, Any], workspace: Path, session_id: str, pid: int) -> tuple[bool, str]:
+def run_auto_deploy(
+    job: dict[str, Any],
+    workspace: Path,
+    session_id: str,
+    pid: int,
+    project_config: dict[str, Any] | None = None,
+) -> tuple[bool, str]:
     project_name = str(job.get("project", ""))
-    project_config = PROJECT_CONFIGS.get(project_name, {})
+    project_config = project_config or get_project_config(project_name)
     if not project_config.get("requiresDeployment", False):
         return True, "AUTO_DEPLOY_NOT_REQUIRED project=" + project_name
     deploy_command = str(project_config.get("deployCommand", ""))
@@ -700,8 +922,9 @@ def run_job(job: dict[str, Any]) -> None:
     attempts = int(job.get("attempts", 0))
     session_id = uuid.uuid4().hex
     try:
-        source_workspace = project_path(str(job["project"]))
-        cwd, git_context = prepare_job_workspace(job, source_workspace)
+        project_config = get_project_config(str(job["project"]))
+        source_workspace = project_path(str(job["project"]), project_config)
+        cwd, git_context = prepare_job_workspace(job, source_workspace, project_config)
     except Exception as exc:
         update_result(job_id, "needs_human", str(exc), "Dispatcher rejected the project path.")
         return
@@ -726,7 +949,17 @@ def run_job(job: dict[str, Any]) -> None:
         str(cwd),
         "--task-stdin",
     ]
-    project_config = PROJECT_CONFIGS[str(job["project"])]
+    execution_mode = str(project_config.get("executionMode", "local"))
+    git_config = project_config.get("git", {})
+    command.extend(["--execution-mode", execution_mode])
+    if execution_mode == "github_direct" and isinstance(git_config, dict):
+        command.extend(
+            [
+                "--github-repository", str(git_config.get("repository", "")),
+                "--github-base-branch", str(git_config.get("baseBranch", "main")),
+                "--github-branch", str(git_context["branch"] if git_context else ""),
+            ]
+        )
     for flag, key in (
         ("--host-workspace", "workspace"),
         ("--host-production-root", "productionRoot"),
@@ -755,7 +988,7 @@ def run_job(job: dict[str, Any]) -> None:
             start_new_session=True,
         )
         assert process.stdin is not None
-        process.stdin.write(task_for(job))
+        process.stdin.write(task_for(job, project_config))
         process.stdin.close()
         update_progress(job_id, "sending_to_chatgpt", "Dispatcher agent起動 pid=" + str(process.pid), session_id, process.pid)
         last_heartbeat = 0.0
@@ -807,10 +1040,17 @@ def run_job(job: dict[str, Any]) -> None:
 
         publish_output = ""
         deploy_output = ""
-        if git_context is None:
-            publish_ok, publish_output = publish_git_changes(job, git_context)
+        if execution_mode == "verify_only":
+            publish_ok = True
+            deploy_ok = True
+            publish_output = "VERIFY_ONLY_NO_PUBLISH"
+            deploy_output = "VERIFY_ONLY_NO_DEPLOY"
+        elif git_context is None:
+            publish_ok, publish_output = publish_git_changes(job, git_context, project_config)
             if publish_ok:
-                deploy_ok, deploy_output = run_auto_deploy(job, cwd, session_id, process.pid)
+                deploy_ok, deploy_output = run_auto_deploy(
+                    job, cwd, session_id, process.pid, project_config
+                )
             else:
                 deploy_ok = False
         else:
@@ -818,9 +1058,21 @@ def run_job(job: dict[str, Any]) -> None:
             lock_path.parent.mkdir(parents=True, exist_ok=True)
             with lock_path.open("a+", encoding="utf-8") as lock_handle:
                 fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX)
-                publish_ok, publish_output = publish_git_changes(job, git_context)
+                if git_context.get("mode") == "github_direct":
+                    publish_ok, publish_output = publish_github_direct_changes(
+                        job,
+                        git_context,
+                        output,
+                        project_config,
+                    )
+                else:
+                    publish_ok, publish_output = publish_git_changes(
+                        job, git_context, project_config
+                    )
                 if publish_ok:
-                    deploy_ok, deploy_output = run_auto_deploy(job, source_workspace, session_id, process.pid)
+                    deploy_ok, deploy_output = run_auto_deploy(
+                        job, source_workspace, session_id, process.pid, project_config
+                    )
                 else:
                     deploy_ok = False
 
@@ -880,7 +1132,8 @@ def claim_next_job(excluded_projects: set[str] | None = None) -> dict[str, Any] 
 
 
 def project_allows_parallel(project: str) -> bool:
-    git_config = PROJECT_CONFIGS.get(project, {}).get("git", {})
+    config = refresh_project_configs().get(project, {})
+    git_config = config.get("git", {})
     return isinstance(git_config, dict) and bool(git_config.get("enabled", False))
 
 
@@ -917,6 +1170,7 @@ def main() -> int:
                 if job is None:
                     time.sleep(POLL_SECONDS)
                     continue
+                refresh_project_configs()
                 if job.get("kind") == "test" or job.get("isTest") is True:
                     LOG.error("console returned a test job; refusing job=%s", job.get("id"))
                     continue
