@@ -1,1 +1,1 @@
-trigger-normalized-apply
+trigger-fixed-hunk-count
