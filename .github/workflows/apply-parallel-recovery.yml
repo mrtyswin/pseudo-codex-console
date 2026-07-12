@@ -27,6 +27,7 @@ jobs:
 
           script = Path('scripts/apply-parallel-recovery-decoded.py')
           source = script.read_text(encoding='utf-8')
+
           old = '''    ''' + "'''" + '''} else {
           applyStage(job, "queued", "再実行待ちへ戻す");
           }
@@ -45,7 +46,34 @@ jobs:
           }''' + "'''" + ''','''
           if old not in source:
               raise SystemExit('automatic continuation compatibility marker not found')
-          script.write_text(source.replace(old, new, 1), encoding='utf-8')
+          source = source.replace(old, new, 1)
+
+          lines = source.splitlines()
+          marker_index = next(
+              (i for i, line in enumerate(lines) if '"agent session key assignment"' in line),
+              None,
+          )
+          if marker_index is None:
+              raise SystemExit('agent session assignment marker not found')
+          start = marker_index
+          while start >= 0 and lines[start].strip() != 'agent = replace_once(':
+              start -= 1
+          end = marker_index
+          while end < len(lines) and lines[end].strip() != ')':
+              end += 1
+          if start < 0 or end >= len(lines):
+              raise SystemExit('agent session assignment block bounds not found')
+          lines[start:end + 1] = [
+              'agent = replace_once(',
+              '    agent,',
+              "    '''  if (!args.task) {''',",
+              "    '''  if (!args.sessionKey && args.jobId) args.sessionKey = args.jobId;",
+              '',
+              "  if (!args.task) {''',",
+              '    "agent session key assignment",',
+              ')',
+          ]
+          script.write_text('\n'.join(lines) + '\n', encoding='utf-8')
           PY
           python3 scripts/apply-parallel-recovery-decoded.py
       - name: Apply compatibility fixes
