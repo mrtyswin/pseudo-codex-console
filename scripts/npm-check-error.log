@@ -6,7 +6,7 @@
 > pseudo-codex-console@0.1.0 check:console
 > node check.js
 
-REQUEST_CONSOLE_ISOLATED_REGRESSION_OK 0c11ccc5-1bb3-4acb-a81b-659d3cbde455
+REQUEST_CONSOLE_ISOLATED_REGRESSION_OK d0d02cc8-6722-4cf5-9476-526e49ca9d17
 
 > pseudo-codex-console@0.1.0 check:agent
 > node tests/agent-no-sha.check.js && node tests/agent-controller.check.js && node tests/chatgpt-parallel.check.js
