@@ -1,2 +1,4 @@
 error: patch failed: agent/agent.js:374
 error: agent/agent.js: patch does not apply
+patch: **** malformed patch at line 12: @@ -75,7 +78,12 @@ function parseArgs(argv) {
+
