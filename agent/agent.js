@@ -486,13 +486,9 @@ async function runGithubDirect(args) {
         phase: 'TEST',
         changedFiles: result.changedFiles,
       });
-      await reportResult(args, {
-        status: 'done',
-        lastError: '',
-        workerLog: '',
-        finalAnswer: result.summary || 'GitHub direct changes are ready for Ubuntu verification.',
-        executionResult: JSON.stringify(result, null, 2),
-        verificationResult: 'GitHub branch and pull request created; host-side verification is pending.',
+      await reportProgress(args, 'verifying', 'GitHub側の作業完了。Ubuntu検証・main同期・本番確認を待機', {
+        phase: 'TEST',
+        changedFiles: result.changedFiles,
       });
       console.log(`\n${GITHUB_COMPLETE_START}\n${JSON.stringify(result)}\n${GITHUB_COMPLETE_END}`);
       console.log(`\n${COMPLETE_MARKER}`);
@@ -982,6 +978,15 @@ async function main() {
   console.log('');
 
   let prompt = buildInitialPrompt(args.task, args.files, args.cwd);
+  if (args.executionMode === 'verify_only') {
+    prompt = [
+      'VERIFICATION-ONLY MODE.',
+      'Do not modify, create, delete, rename, stage, commit, or push any file.',
+      'Use only read-only inspection commands and the smallest relevant verification commands.',
+      'At least one verification command must succeed before TASK_COMPLETE.',
+      prompt,
+    ].join('\n\n');
+  }
   let isNew = args.sessionFile ? !fs.existsSync(args.sessionFile) : !args.reuseChat;
   let turns = 0;
   let phase = 'INSPECT';
@@ -1224,6 +1229,17 @@ async function main() {
       ],
     });
 
+    if (
+      args.executionMode === 'verify_only' &&
+      (edits.length || replacements.length || patches.length || changes.length)
+    ) {
+      await blockJob(
+        'Verification-only mode refused a file mutation request.',
+        'verify_only_mutation'
+      );
+      return;
+    }
+
     if (edits.length || replacements.length || patches.length || changes.length) {
       if (phase === 'INSPECT') phase = 'PLAN';
       phase = 'EDIT';
@@ -1330,6 +1346,10 @@ async function main() {
     }
 
     if (completed) {
+      if (args.executionMode === 'verify_only' && !verificationPassed) {
+        prompt = 'Completion rejected: verification-only mode requires at least one successful verification command.';
+        continue;
+      }
       if (hasEdited && !verificationPassed) {
         prompt = `Completion rejected by the controller: edited files require a successful verification command. Run the smallest relevant syntax and regression tests now.`;
         if (updateNoProgress()) {

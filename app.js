@@ -936,6 +936,7 @@ function sanitizeUserFacingText(value) {
     .replace(/[^]+/g, '')
     .replace(/\bturn\d+(?:file|search|view|news)\d+\b/gi, '')
     .replace(/\bfile_[0-9a-f]{16,}\b/gi, '')
+    .replace(/\bH\d{2,}\b/g, '')
     .replace(/\s+id="[0-9a-f]{6,16}"/gi, '')
     .replace(/\b(Bearer)\s+[A-Za-z0-9._~+\/-]+/gi, '$1 [REDACTED]')
     .replace(/\b([A-Z0-9_]*(?:TOKEN|PASSWORD|SECRET|API_KEY)[A-Z0-9_]*)\s*[:=]\s*([^\s]+)/gi, '$1=[REDACTED]')
@@ -1988,6 +1989,7 @@ return redactSecrets(value)
 .replace(/[^]+/g, "")
 .replace(/\bturn\d+(?:file|search|view|news)\d+\b/gi, "")
 .replace(/\bfile_[0-9a-f]{16,}\b/gi, "")
+.replace(/\bH\d{2,}\b/g, "")
 .replace(/\s+id="[0-9a-f]{6,16}"/gi, "")
 .trim();
 }

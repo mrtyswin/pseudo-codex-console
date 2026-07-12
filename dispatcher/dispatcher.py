@@ -170,10 +170,10 @@ def job_session_path(job_id: str) -> Path:
     return session_path
 
 
-def project_path(project: str) -> Path:
+def project_path(project: str, project_config: dict[str, Any] | None = None) -> Path:
     if not PROJECT_PATTERN.fullmatch(project):
         raise ValueError("project must be a lowercase slug")
-    config = get_project_config(project)
+    config = project_config or get_project_config(project)
     candidate = Path(str(config["workspace"])).resolve()
     try:
         candidate.relative_to(PROJECT_ROOT)
@@ -289,6 +289,9 @@ def prepare_job_workspace(
 ) -> tuple[Path, dict[str, Any] | None]:
     project_name = str(job["project"])
     config = project_config or get_project_config(project_name)
+    execution_mode = str(config.get("executionMode", "local"))
+    if execution_mode == "verify_only":
+        return source_workspace, None
     git_config = config.get("git", {})
     if not isinstance(git_config, dict) or not git_config.get("enabled", False):
         return source_workspace, None
@@ -467,14 +470,22 @@ def publish_github_direct_changes(
     base_branch = str(result.get("baseBranch", ""))
     commit_sha = str(result.get("commitSha", ""))
     pull_request_url = str(result.get("pullRequestUrl", ""))
+    changed_files = [str(item) for item in result.get("changedFiles", []) if isinstance(item, str)]
     expected_branch = str(context["branch"])
+    expected_pr_prefix = f"https://github.com/{repository}/pull/"
+    sensitive_path = re.compile(
+        r"(^|/)(?:\.env(?:\.|$)|id_[rd]sa(?:\.|$)|.*\.(?:pem|key|p12|pfx)|credentials(?:\.|$)|secrets?(?:\.|$))",
+        re.IGNORECASE,
+    )
     if (
         repository != str(context["repository"])
         or branch != expected_branch
         or base_branch != str(context["baseBranch"])
         or not re.fullmatch(r"[0-9a-fA-F]{40}", commit_sha)
+        or not pull_request_url.startswith(expected_pr_prefix)
+        or any(sensitive_path.search(path) for path in changed_files)
     ):
-        return False, "GITHUB_COMPLETE_RESULT_MISMATCH"
+        return False, "GITHUB_COMPLETE_RESULT_MISMATCH_OR_SENSITIVE_PATH"
 
     source = Path(context["source"])
     remote = str(context["remote"])
@@ -565,6 +576,16 @@ def task_for(job: dict[str, Any], project_config: dict[str, Any] | None = None) 
     project_name = str(job.get("project", ""))
     project_config = project_config or get_project_config(project_name)
     git_config = project_config.get("git", {})
+    if project_config.get("executionMode") == "verify_only":
+        return "\n".join(
+            [
+                "Verification-only task. Do not modify files or Git state.",
+                "Run read-only inspection and the smallest relevant tests, then report the results.",
+                "Task title: " + str(job.get("title", "")),
+                "Task instruction:",
+                str(job.get("instruction", "")),
+            ]
+        )
     if project_config.get("executionMode") == "github_direct":
         return "\n".join(
             [
@@ -902,7 +923,7 @@ def run_job(job: dict[str, Any]) -> None:
     session_id = uuid.uuid4().hex
     try:
         project_config = get_project_config(str(job["project"]))
-        source_workspace = project_path(str(job["project"]))
+        source_workspace = project_path(str(job["project"]), project_config)
         cwd, git_context = prepare_job_workspace(job, source_workspace, project_config)
     except Exception as exc:
         update_result(job_id, "needs_human", str(exc), "Dispatcher rejected the project path.")
@@ -1019,8 +1040,13 @@ def run_job(job: dict[str, Any]) -> None:
 
         publish_output = ""
         deploy_output = ""
-        if git_context is None:
-            publish_ok, publish_output = publish_git_changes(job, git_context)
+        if execution_mode == "verify_only":
+            publish_ok = True
+            deploy_ok = True
+            publish_output = "VERIFY_ONLY_NO_PUBLISH"
+            deploy_output = "VERIFY_ONLY_NO_DEPLOY"
+        elif git_context is None:
+            publish_ok, publish_output = publish_git_changes(job, git_context, project_config)
             if publish_ok:
                 deploy_ok, deploy_output = run_auto_deploy(
                     job, cwd, session_id, process.pid, project_config
