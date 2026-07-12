@@ -44,7 +44,9 @@ jobs:
                   elif line[0] not in ' +-\\':
                       line = ' ' + line
               output.append(line)
-          path.write_text('\n'.join(output), encoding='utf-8')
+          while output and output[-1] == ' ':
+              output.pop()
+          path.write_text('\n'.join(output) + '\n', encoding='utf-8')
           PY
             if ! git apply --check --recount .pseudo-codex/phase2.patch 2>.pseudo-codex/phase2.error; then
               git config user.name "Pseudo Codex GitHub Direct"
