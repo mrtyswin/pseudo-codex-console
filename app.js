@@ -931,6 +931,42 @@ function formatDate(value) {
   return Number.isNaN(date.getTime()) ? '' : formatter.format(date) + ' JST';
 }
 
+function sanitizeUserFacingText(value) {
+  return String(value == null ? '' : value)
+    .replace(/[^]+/g, '')
+    .replace(/\bturn\d+(?:file|search|view|news)\d+\b/gi, '')
+    .replace(/\bfile_[0-9a-f]{16,}\b/gi, '')
+    .replace(/\s+id="[0-9a-f]{6,16}"/gi, '')
+    .replace(/\b(Bearer)\s+[A-Za-z0-9._~+\/-]+/gi, '$1 [REDACTED]')
+    .replace(/\b([A-Z0-9_]*(?:TOKEN|PASSWORD|SECRET|API_KEY)[A-Z0-9_]*)\s*[:=]\s*([^\s]+)/gi, '$1=[REDACTED]')
+    .trim();
+}
+
+function clip(value, limit) {
+  var text = String(value || '');
+  return text.length > limit ? text.slice(0, limit) + '\n…省略…' : text;
+}
+
+function conversationText(turns) {
+  var values = Array.isArray(turns) ? turns.slice(-20) : [];
+  return values.map(function (turn) {
+    var prompt = clip(sanitizeUserFacingText(turn.prompt), 5000);
+    var response = clip(sanitizeUserFacingText(turn.response), 7000);
+    var actions = [];
+    if (Array.isArray(turn.runCommands) && turn.runCommands.length) {
+      actions.push('Ubuntu実行:\n' + turn.runCommands.join('\n'));
+    }
+    if (Array.isArray(turn.fileChanges) && turn.fileChanges.length) {
+      actions.push('変更:\n' + turn.fileChanges.map(function (change) {
+        return '- ' + String(change.path || '');
+      }).join('\n'));
+    }
+    return 'ユーザー / システム\n' + (prompt || '(記録なし)') +
+      '\n\nChatGPT\n' + (response || '(記録なし)') +
+      (actions.length ? '\n\n' + actions.join('\n\n') : '');
+  }).join('\n\n--------------------\n\n');
+}
+
 function historyText(entries) {
   return (entries || []).map(function (entry) {
     return formatDate(entry.at) + ' [' + (entry.assignee || '') + ' / ' +
@@ -1033,6 +1069,7 @@ function renderJob(job) {
     '<div class="job-download"><a href="/api/jobs/' + encodeURIComponent(job.id) +
     '/transcript" download="transcript.json">このジョブのやり取りをダウンロード</a></div>' +
     detail(job.id, '指示を表示', job.instruction, false) +
+    detail(job.id, 'ChatGPTとのやり取り', conversationText(job.conversationTurns), false) +
     detail(job.id, '最終結果を表示', job.result, true) +
     detail(job.id, 'ワーカーログを表示', job.workerLog, false) +
     detail(job.id, '変更トランザクションを表示', JSON.stringify(job.transactions || [], null, 2), false) +
@@ -1910,6 +1947,7 @@ const git = projectConfig && typeof projectConfig.git === "object"
 : {};
 return {
 enabled: git.enabled === true,
+repository: typeof git.repository === "string" ? git.repository.trim() : "",
 remote: typeof git.remote === "string" && git.remote.trim() ? git.remote.trim() : "origin",
 baseBranch: typeof git.baseBranch === "string" && git.baseBranch.trim() ? git.baseBranch.trim() : "main",
 branchPrefix: typeof git.branchPrefix === "string" && git.branchPrefix.trim() ? git.branchPrefix.trim() : "chatgpt-job",
@@ -1920,8 +1958,12 @@ push: git.push === true
 function projectSummary(name, projectConfig) {
 const config = projectConfig && typeof projectConfig === "object" ? projectConfig : {};
 const git = projectGitConfig(config);
+const executionMode = ["github_direct", "local", "verify_only"].includes(config.executionMode)
+? config.executionMode
+: (git.enabled && git.repository ? "github_direct" : "local");
 return {
 name,
+executionMode,
 workspace: typeof config.workspace === "string" ? config.workspace : "",
 sandboxWorkspace: typeof config.sandboxWorkspace === "string" ? config.sandboxWorkspace : "",
 productionRoot: typeof config.productionRoot === "string" ? config.productionRoot : "",
@@ -1939,6 +1981,41 @@ function redactSecrets(value) {
 return String(value || "")
 .replace(/\b(Bearer)\s+[A-Za-z0-9._~+\/-]+/gi, "$1 [REDACTED]")
 .replace(/\b([A-Z0-9_]*(?:TOKEN|PASSWORD|SECRET|API_KEY)[A-Z0-9_]*)\s*[:=]\s*([^\s]+)/gi, "$1=[REDACTED]");
+}
+
+function sanitizeUserFacingText(value) {
+return redactSecrets(value)
+.replace(/[^]+/g, "")
+.replace(/\bturn\d+(?:file|search|view|news)\d+\b/gi, "")
+.replace(/\bfile_[0-9a-f]{16,}\b/gi, "")
+.replace(/\s+id="[0-9a-f]{6,16}"/gi, "")
+.trim();
+}
+
+function renderConversationText(turns) {
+const values = Array.isArray(turns) ? turns.slice(-20) : [];
+if (!values.length) return "";
+return values.map(function(turn) {
+const prompt = compactText(sanitizeUserFacingText(turn.prompt), 5000);
+const response = compactText(sanitizeUserFacingText(turn.response), 7000);
+const actions = [];
+if (Array.isArray(turn.runCommands) && turn.runCommands.length) {
+actions.push("Ubuntu実行:\n" + turn.runCommands.join("\n"));
+}
+if (Array.isArray(turn.fileChanges) && turn.fileChanges.length) {
+actions.push("変更:\n" + turn.fileChanges.map(function(change) {
+return "- " + String(change.path || "");
+}).join("\n"));
+}
+return [
+"ユーザー / システム",
+prompt || "(記録なし)",
+"",
+"ChatGPT",
+response || "(記録なし)",
+actions.length ? "\n" + actions.join("\n\n") : ""
+].join("\n");
+}).join("\n\n--------------------\n\n");
 }
 
 function buildChatGptHandoff(job) {
@@ -2139,7 +2216,12 @@ const workspace = String(value.workspace || "").trim();
 const requiresDeployment = parseBooleanField(value.requiresDeployment);
 const gitEnabled = parseBooleanField(value.gitEnabled);
 const gitPush = parseBooleanField(value.gitPush);
+const requestedMode = String(value.executionMode || "").trim();
+const executionMode = ["github_direct", "local", "verify_only"].includes(requestedMode)
+? requestedMode
+: (gitEnabled ? "github_direct" : "local");
 const config = {
+executionMode,
 workspace,
 sandboxWorkspace: String(value.sandboxWorkspace || "").trim(),
 productionRoot: String(value.productionRoot || "").trim(),
@@ -2151,6 +2233,7 @@ deploymentOwner: String(value.deploymentOwner || "").trim(),
 requiresDeployment,
 git: {
 enabled: gitEnabled,
+repository: String(value.gitRepository || "").trim(),
 remote: String(value.gitRemote || "origin").trim() || "origin",
 baseBranch: String(value.gitBaseBranch || "main").trim() || "main",
 branchPrefix: String(value.gitBranchPrefix || "chatgpt-job").trim() || "chatgpt-job",
@@ -2169,6 +2252,12 @@ throw new Error("deployCommand is required when requiresDeployment is true");
 }
 if (gitEnabled && !PROJECT_PATTERN.test(config.git.branchPrefix.replace(/[/.]/g, "-"))) {
 throw new Error("git branch prefix must be a simple slug-like value");
+}
+if (executionMode === "github_direct" && !gitEnabled) {
+throw new Error("GitHub直接編集にはGit管理を有効にしてください");
+}
+if (executionMode === "github_direct" && !/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(config.git.repository)) {
+throw new Error("GitHub直接編集には owner/repository 形式のRepositoryが必要です");
 }
 
 return {
@@ -2957,6 +3046,7 @@ renderJobActions(job),
 renderHandoffActions(job),
 ['<div class="job-download"><a href="/api/jobs/', encodeURIComponent(job.id), '/transcript" download="transcript.json">このジョブのやり取りをダウンロード</a></div>'].join(""),
 renderDetails(job.id, "指示を表示", job.instruction, false, false),
+renderDetails(job.id, "ChatGPTとのやり取り", renderConversationText(job.conversationTurns), false, false),
 renderDetails(job.id, "最終結果を表示", job.result, false, true),
 renderDetails(job.id, "ワーカーログを表示", job.workerLog, false, false),
 renderDetails(job.id, "変更トランザクションを表示", JSON.stringify(job.transactions, null, 2), false, false),
@@ -3007,6 +3097,9 @@ return '<p class="empty">まだプロジェクト設定がありません。下�
 
 return names.map(function(name) {
 const summary = projectSummary(name, configs[name]);
+const executionMode = summary.executionMode === "github_direct"
+? "GitHub直接編集"
+: summary.executionMode === "verify_only" ? "検証のみ" : "Ubuntuローカル編集";
 const gitMode = summary.git.enabled
 ? (summary.git.push ? "GitHub正本・push有効" : "Git管理あり・push無効")
 : "ローカル作業のみ";
@@ -3024,9 +3117,10 @@ summary.healthUrl ? '<a href="' + escapeHtml(summary.healthUrl) + '" target="_bl
 '<div class="project-facts"><span>Workspace: <strong>', escapeHtml(summary.workspace || "(未設定)"), '</strong></span></div>',
 summary.sandboxWorkspace ? '<div class="project-facts"><span>Sandbox: <strong>' + escapeHtml(summary.sandboxWorkspace) + '</strong></span></div>' : "",
 '<div class="project-facts"><span>配備: <strong>', escapeHtml(deployMode), '</strong></span><span>Git: <strong>', escapeHtml(gitMode), '</strong></span></div>',
+'<div class="project-facts"><span>実行方式: <strong>', escapeHtml(executionMode), '</strong></span></div>',
 summary.productionRoot ? '<div class="project-facts"><span>Production Root: <strong>' + escapeHtml(summary.productionRoot) + '</strong></span></div>' : "",
 summary.service ? '<div class="project-facts"><span>Service: <strong>' + escapeHtml(summary.service) + '</strong></span></div>' : "",
-summary.git.enabled ? '<div class="project-facts"><span>Remote: <strong>' + escapeHtml(summary.git.remote) + '</strong></span><span>Base: <strong>' + escapeHtml(summary.git.baseBranch) + '</strong></span><span>Branch Prefix: <strong>' + escapeHtml(summary.git.branchPrefix) + '</strong></span></div>' : "",
+summary.git.enabled ? '<div class="project-facts"><span>Repository: <strong>' + escapeHtml(summary.git.repository || "(未設定)") + '</strong></span><span>Remote: <strong>' + escapeHtml(summary.git.remote) + '</strong></span><span>Base: <strong>' + escapeHtml(summary.git.baseBranch) + '</strong></span><span>Branch Prefix: <strong>' + escapeHtml(summary.git.branchPrefix) + '</strong></span></div>' : "",
 note,
 '</article>'
 ].join("");
@@ -3038,6 +3132,11 @@ return [
 '<form method="post" action="/projects" class="project-config-form">',
 '<div class="project-config-grid">',
 '<div><label for="project-config-name">プロジェクト名</label><input id="project-config-name" name="name" maxlength="64" placeholder="wordpress-demo" required></div>',
+'<div><label for="project-config-mode">実行方式</label><select id="project-config-mode" name="executionMode">' +
+'<option value="github_direct">GitHub直接編集（推奨）</option>' +
+'<option value="local">Ubuntuローカル編集</option>' +
+'<option value="verify_only">検証のみ</option>' +
+'</select></div>',
 '<div><label for="project-config-workspace">Workspace</label><input id="project-config-workspace" name="workspace" maxlength="500" placeholder="/home/ubuntu/chatgpt-projects/wordpress-demo" required></div>',
 '<div><label for="project-config-sandbox">Sandbox Workspace</label><input id="project-config-sandbox" name="sandboxWorkspace" maxlength="500" placeholder="/mnt/workspace"></div>',
 '<div><label for="project-config-health">Health URL</label><input id="project-config-health" name="healthUrl" maxlength="500" placeholder="http://127.0.0.1:8080/health"></div>',
@@ -3050,9 +3149,10 @@ return [
 '<div class="checkbox-row"><label><input type="checkbox" name="requiresDeployment" value="true"> 本番反映が必要</label></div>',
 '<div class="project-git-box">',
 '<h3>GitHub / Git 運用</h3>',
-'<p class="helper">`request-console` はここを有効にして GitHub を正本にする運用を推奨します。ChatGPT は workspace 内で修正し、dispatcher が commit/push を担当します。</p>',
+'<p class="helper">GitHub直接編集ではChatGPTが専用ブランチとPRをGitHub上で作成し、Ubuntuは検証・main同期・本番反映だけを担当します。</p>',
 '<div class="checkbox-row"><label><input type="checkbox" name="gitEnabled" value="true"> Git 管理を有効にする</label><label><input type="checkbox" name="gitPush" value="true"> 成功後に push する</label></div>',
 '<div class="project-config-grid">',
+'<div><label for="project-config-repository">GitHub Repository</label><input id="project-config-repository" name="gitRepository" maxlength="300" placeholder="owner/repository"></div>',
 '<div><label for="project-config-remote">Git Remote</label><input id="project-config-remote" name="gitRemote" maxlength="200" value="origin"></div>',
 '<div><label for="project-config-base">Base Branch</label><input id="project-config-base" name="gitBaseBranch" maxlength="200" value="main"></div>',
 '<div><label for="project-config-prefix">Branch Prefix</label><input id="project-config-prefix" name="gitBranchPrefix" maxlength="200" value="chatgpt-job"></div>',
@@ -3133,6 +3233,12 @@ return [
 ".checkbox-row label{display:inline-flex;gap:8px;align-items:center;margin:0;font-weight:700}",
 ".checkbox-row input{width:auto}",
 ".helper{font-size:.88rem;color:#687386}",
+".settings-details{padding:0;overflow:hidden}",
+".settings-details>summary{display:flex;align-items:center;justify-content:space-between;min-height:52px;padding:16px 20px;font-size:1.15rem;list-style:none}",
+".settings-details>summary::-webkit-details-marker{display:none}",
+".settings-details>summary::after{content:'＋';margin-left:12px}",
+".settings-details[open]>summary::after{content:'−'}",
+".settings-content{padding:0 20px 20px}",
 "details{margin-top:10px;border:1px solid #e3e7ee;border-radius:8px;padding:9px 11px}",
 "summary{cursor:pointer;font-weight:700}",
 "pre{white-space:pre-wrap;word-break:break-word;margin:10px 0 0;font:inherit;line-height:1.55}",
@@ -3143,7 +3249,7 @@ return [
 ".history-status{font-size:.82rem;font-weight:700;color:#765600}",
 ".history-log{display:block;max-block-size:min(48dvh,28rem);min-block-size:10rem;overflow:auto;overscroll-behavior:contain;white-space:pre-wrap;overflow-wrap:anywhere;word-break:break-word;user-select:text;cursor:text}",
 ".empty{text-align:center;color:#687386}",
-"@media(max-width:700px){main{width:min(100% - 20px,1200px);margin:20px auto}.card,.job,.project-card{padding:16px}header,.job-head,.project-card-head{display:block}.health,.badges{margin-top:12px;justify-content:flex-start}.job-filters,.project-config-grid{grid-template-columns:1fr}.result-count{justify-self:start;padding-bottom:0}}",
+"@media(max-width:700px){main{width:min(100% - 20px,1200px);margin:20px auto}.card,.job,.project-card{padding:16px}.settings-details{padding:0}.settings-details>summary{padding:14px 16px}.settings-content{padding:0 16px 16px}header,.job-head,.project-card-head{display:block}.health,.badges{margin-top:12px;justify-content:flex-start}.job-filters,.project-config-grid{grid-template-columns:1fr}.result-count{justify-self:start;padding-bottom:0}}",
 "</style>",
 "</head>",
 "<body>",
@@ -3170,18 +3276,6 @@ renderProjectOptions(),
 '<textarea id="instruction" name="instruction" maxlength="20000" required></textarea>',
 '<button type="submit">キューへ登録</button>',
 "</form>",
-"</section>",
-'<section class="card">',
-"<h2>プロジェクト設定</h2>",
-'<p class="helper">このコンソールは「登録済みプロジェクト」を対象にジョブを流します。新しい対象を増やす時は、先にここで登録します。</p>',
-'<div class="project-grid">',
-renderProjectCatalog(),
-"</div>",
-"</section>",
-'<section class="card">',
-"<h2>プロジェクトを追加・更新</h2>",
-'<p class="helper">GitHub 連携を使う場合は Git を有効にし、必要なら push も有効にしてください。`request-console` 自身は GitHub を正本にする運用が安定です。</p>',
-renderProjectConfigForm(),
 "</section>",
 '<section class="card">',
 "<h2>ジョブ一覧</h2>",
@@ -3213,6 +3307,22 @@ String(jobs.length),
 renderJobs(jobs),
 "</div>",
 "</section>",
+'<details class="card settings-details">',
+'<summary>プロジェクト設定を表示</summary>',
+'<div class="settings-content">',
+'<p class="helper">このコンソールは「登録済みプロジェクト」を対象にジョブを流します。新しい対象を増やす時は、先にここで登録します。</p>',
+'<div class="project-grid">',
+renderProjectCatalog(),
+"</div>",
+"</div>",
+"</details>",
+'<details class="card settings-details">',
+'<summary>プロジェクトを追加・更新</summary>',
+'<div class="settings-content">',
+'<p class="helper">GitHub連携を使う場合はGitを有効にし、Repositoryをowner/name形式で登録してください。</p>',
+renderProjectConfigForm(),
+"</div>",
+"</details>",
 "</main>",
 CLIENT_SCRIPT_TAG,
 "</body>",
