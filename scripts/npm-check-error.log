@@ -1,0 +1,27 @@
+
+> pseudo-codex-console@0.1.0 check
+> npm run check:console && npm run check:agent
+
+
+> pseudo-codex-console@0.1.0 check:console
+> node check.js
+
+REQUEST_CONSOLE_ISOLATED_REGRESSION_OK 0c11ccc5-1bb3-4acb-a81b-659d3cbde455
+
+> pseudo-codex-console@0.1.0 check:agent
+> node tests/agent-no-sha.check.js && node tests/agent-controller.check.js && node tests/chatgpt-parallel.check.js
+
+AGENT_NO_SHA_PROTOCOL_OK
+AGENT_CONTROLLER_RECOVERY_OK
+AssertionError [ERR_ASSERTION]: The expression evaluated to a falsy value:
+
+  assert.ok(a2.startsWith(aConversation + ":A2"))
+
+    at /home/runner/work/pseudo-codex-console/pseudo-codex-console/tests/chatgpt-parallel.check.js:54:10
+    at process.processTicksAndRejections (node:internal/process/task_queues:95:5) {
+  generatedMessage: true,
+  code: 'ERR_ASSERTION',
+  actual: false,
+  expected: true,
+  operator: '=='
+}
