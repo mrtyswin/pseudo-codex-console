@@ -46,7 +46,7 @@ jobs:
         run: |
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add scripts/apply-parallel-error.log
+          git add -f scripts/apply-parallel-error.log
           git commit -m "Record parallel recovery apply failure"
           git push origin HEAD:feature/parallel-recovery
       - name: Stop after apply failure
