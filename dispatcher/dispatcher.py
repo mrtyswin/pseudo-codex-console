@@ -5,6 +5,7 @@ from __future__ import annotations
 
 from concurrent.futures import Future, ThreadPoolExecutor
 from datetime import datetime, timezone
+import fcntl
 import json
 import logging
 import os
@@ -161,6 +162,88 @@ def git_error(result: subprocess.CompletedProcess[str]) -> str:
     return compact((result.stdout or "") + (result.stderr or ""), 8000).strip()
 
 
+def git_head(workspace: Path, reference: str = "HEAD") -> str:
+    result = run_git(workspace, ["rev-parse", reference])
+    if result.returncode != 0:
+        raise RuntimeError("Cannot resolve Git commit: " + git_error(result))
+    return result.stdout.strip()
+
+
+def validate_primary_workspace(workspace: Path, base_branch: str) -> tuple[bool, str]:
+    status = run_git(workspace, ["status", "--porcelain=v1", "--untracked-files=all"])
+    if status.returncode != 0:
+        return False, "Cannot inspect Ubuntu workspace: " + git_error(status)
+    if status.stdout.strip():
+        return False, "UBUNTU_WORKSPACE_DIRTY"
+    branch = run_git(workspace, ["symbolic-ref", "--short", "HEAD"])
+    if branch.returncode != 0 or branch.stdout.strip() != base_branch:
+        return False, "UBUNTU_WORKSPACE_NOT_ON_MAIN"
+    return True, "UBUNTU_WORKSPACE_READY"
+
+
+def run_publish_verification(
+    project_config: dict[str, Any],
+    workspace: Path,
+    remote: str,
+    base_branch: str,
+) -> tuple[bool, str]:
+    outputs: list[str] = []
+    diff_check = run_git(workspace, ["diff", "--check", f"{remote}/{base_branch}...HEAD"])
+    if diff_check.returncode != 0:
+        return False, "PUBLISH_VERIFY_DIFF_FAILED: " + git_error(diff_check)
+    outputs.append("PUBLISH_VERIFY_DIFF_OK")
+
+    commands: list[list[str]] = []
+    if (workspace / "dispatcher" / "dispatcher.py").is_file():
+        commands.append([sys.executable, "-m", "py_compile", "dispatcher/dispatcher.py"])
+    if (workspace / "app.js").is_file():
+        commands.append(["node", "--check", "app.js"])
+
+    git_config = project_config.get("git", {})
+    configured_command = git_config.get("publishVerifyCommand") if isinstance(git_config, dict) else None
+    if isinstance(configured_command, str) and configured_command.strip():
+        commands.append(["/bin/sh", "-lc", configured_command])
+
+    for command in commands:
+        result = subprocess.run(
+            command,
+            cwd=workspace,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            capture_output=True,
+            timeout=600,
+            check=False,
+        )
+        output = compact((result.stdout or "") + (result.stderr or ""), 20_000).strip()
+        outputs.append("$ " + " ".join(command) + "\n" + output)
+        if result.returncode != 0:
+            return False, "\n".join(outputs)
+    outputs.append("PUBLISH_VERIFY_OK")
+    return True, "\n".join(outputs)
+
+
+def sync_primary_workspace(
+    workspace: Path,
+    remote: str,
+    base_branch: str,
+    expected_commit: str,
+) -> tuple[bool, str]:
+    ready, detail = validate_primary_workspace(workspace, base_branch)
+    if not ready:
+        return False, detail
+    fetch = run_git(workspace, ["fetch", "--prune", remote, base_branch], timeout=300)
+    if fetch.returncode != 0:
+        return False, "Cannot fetch Ubuntu workspace: " + git_error(fetch)
+    merge = run_git(workspace, ["merge", "--ff-only", f"{remote}/{base_branch}"], timeout=300)
+    if merge.returncode != 0:
+        return False, "Cannot fast-forward Ubuntu workspace: " + git_error(merge)
+    actual_commit = git_head(workspace)
+    if actual_commit != expected_commit:
+        return False, f"UBUNTU_WORKSPACE_COMMIT_MISMATCH expected={expected_commit} actual={actual_commit}"
+    return True, f"UBUNTU_SYNC_OK commit={actual_commit}"
+
+
 def prepare_job_workspace(job: dict[str, Any], source_workspace: Path) -> tuple[Path, dict[str, Any] | None]:
     project_name = str(job["project"])
     git_config = PROJECT_CONFIGS[project_name].get("git", {})
@@ -184,6 +267,7 @@ def prepare_job_workspace(job: dict[str, Any], source_workspace: Path) -> tuple[
             "worktree": worktree,
             "branch": branch,
             "remote": remote,
+            "baseBranch": base_branch,
             "push": bool(git_config.get("push", False)),
         }
     if worktree.exists():
@@ -204,39 +288,84 @@ def prepare_job_workspace(job: dict[str, Any], source_workspace: Path) -> tuple[
         "worktree": worktree,
         "branch": branch,
         "remote": remote,
+        "baseBranch": base_branch,
         "push": bool(git_config.get("push", False)),
     }
 
 
 def publish_git_changes(job: dict[str, Any], context: dict[str, Any] | None) -> tuple[bool, str]:
+    project_name = str(job.get("project", ""))
+    project_config = PROJECT_CONFIGS.get(project_name, {})
     if context is None:
-        return True, "GIT_PUBLISH_NOT_CONFIGURED"
+        if project_config.get("requiresDeployment", False):
+            return False, "GIT_PUBLISH_NOT_CONFIGURED"
+        return True, "GIT_DISABLED"
+
     worktree = Path(context["worktree"])
+    source = Path(context["source"])
+    remote = str(context["remote"])
+    base_branch = str(context["baseBranch"])
+    branch = str(context["branch"])
+    if not context.get("push", False):
+        return False, f"job branch: {branch}\npush結果: disabled"
+
     status = run_git(worktree, ["status", "--porcelain=v1", "--untracked-files=all"])
     if status.returncode != 0:
         return False, "Cannot inspect Git changes: " + git_error(status)
-    if not status.stdout.strip():
-        return True, "GIT_PUBLISH_NO_CHANGES"
 
-    add = run_git(worktree, ["add", "-A"])
-    if add.returncode != 0:
-        return False, "Cannot stage Git changes: " + git_error(add)
-    title = compact(str(job.get("title", "job")), 120).replace("\n", " ").strip() or "job"
-    commit = run_git(worktree, ["commit", "-m", f"Pseudo Codex: {title}"])
-    if commit.returncode != 0:
-        return False, "Cannot commit Git changes; configure a Git author on the Ubuntu host: " + git_error(commit)
-    commit_id = run_git(worktree, ["rev-parse", "--short", "HEAD"])
-    detail = "GIT_COMMIT_OK branch=" + str(context["branch"]) + " commit=" + commit_id.stdout.strip()
-    if not context.get("push", False):
-        return True, detail + " push=disabled"
-    push = run_git(
-        worktree,
-        ["push", "--set-upstream", str(context["remote"]), str(context["branch"])],
-        timeout=300,
+    push_result = "no-changes"
+    if status.stdout.strip():
+        add = run_git(worktree, ["add", "-A"])
+        if add.returncode != 0:
+            return False, "Cannot stage Git changes: " + git_error(add)
+        title = compact(str(job.get("title", "job")), 120).replace("\n", " ").strip() or "job"
+        commit = run_git(worktree, ["commit", "-m", f"Pseudo Codex: {title}"])
+        if commit.returncode != 0:
+            return False, "Cannot commit Git changes; configure a Git author on the Ubuntu host: " + git_error(commit)
+        branch_push = run_git(worktree, ["push", "--set-upstream", remote, branch], timeout=300)
+        if branch_push.returncode != 0:
+            return False, "Cannot push Git branch: " + git_error(branch_push)
+        push_result = "ok"
+
+    job_commit = git_head(worktree)
+    fetch = run_git(worktree, ["fetch", "--prune", remote, base_branch], timeout=300)
+    if fetch.returncode != 0:
+        return False, "Cannot refresh origin base: " + git_error(fetch)
+    rebase = run_git(worktree, ["rebase", f"{remote}/{base_branch}"], timeout=300)
+    if rebase.returncode != 0:
+        run_git(worktree, ["rebase", "--abort"])
+        return False, "GIT_REBASE_CONFLICT: " + git_error(rebase)
+
+    verify_ok, verify_output = run_publish_verification(project_config, worktree, remote, base_branch)
+    if not verify_ok:
+        return False, verify_output
+
+    ready, ready_output = validate_primary_workspace(source, base_branch)
+    if not ready:
+        return False, ready_output
+
+    main_commit = git_head(worktree)
+    main_push = run_git(worktree, ["push", remote, f"HEAD:{base_branch}"], timeout=300)
+    if main_push.returncode != 0:
+        return False, "Cannot fast-forward GitHub main: " + git_error(main_push)
+
+    sync_ok, sync_output = sync_primary_workspace(source, remote, base_branch, main_commit)
+    if not sync_ok:
+        return False, sync_output
+
+    return True, "\n".join(
+        [
+            f"job branch: {branch}",
+            f"job commit SHA: {job_commit}",
+            f"GitHub main SHA: {main_commit}",
+            f"Ubuntu workspace SHA: {main_commit}",
+            f"push結果: {push_result}",
+            "main反映結果: fast-forward",
+            "Ubuntu同期結果: ok",
+            verify_output,
+            sync_output,
+        ]
     )
-    if push.returncode != 0:
-        return False, "Cannot push Git branch: " + git_error(push)
-    return True, detail + " push=ok"
 
 
 def cleanup_git_worktree(context: dict[str, Any] | None) -> None:
@@ -244,7 +373,7 @@ def cleanup_git_worktree(context: dict[str, Any] | None) -> None:
         return
     source = Path(context["source"])
     worktree = Path(context["worktree"])
-    result = run_git(source, ["worktree", "remove", "--force", str(worktree)], timeout=300)
+    result = run_git(source, ["worktree", "remove", str(worktree)], timeout=300)
     if result.returncode != 0:
         LOG.warning("could not remove completed worktree path=%s detail=%s", worktree, git_error(result))
 
@@ -318,7 +447,13 @@ def log_reference(job_id: str, detail: str = "") -> str:
     return pointer if not prefix else prefix + "\n\n" + pointer
 
 
-def update_result(job_id: str, status: str, last_error: str, detail: str = "") -> None:
+def update_result(
+    job_id: str,
+    status: str,
+    last_error: str,
+    detail: str = "",
+    verification_result: str | None = None,
+) -> None:
     path = "/api/jobs/" + parse.quote(job_id, safe="") + "/result"
     current = get_job(job_id) or {}
     api_json(
@@ -330,7 +465,11 @@ def update_result(job_id: str, status: str, last_error: str, detail: str = "") -
             "workerLog": log_reference(job_id, detail),
             "finalAnswer": str(current.get("finalAnswer", "")),
             "executionResult": str(current.get("executionResult", "")),
-            "verificationResult": str(current.get("verificationResult", "")),
+            "verificationResult": (
+                str(current.get("verificationResult", ""))
+                if verification_result is None
+                else compact(verification_result, 20_000)
+            ),
         },
     )
 
@@ -475,8 +614,75 @@ def run_auto_deploy(job: dict[str, Any], workspace: Path, session_id: str, pid: 
             )
             output = compact((result.stdout or "") + (result.stderr or ""), 20_000)
             outputs.append(f"auto-deploy attempt={attempt} exit={result.returncode}\n{output}".strip())
-            if result.returncode == 0:
-                return True, "\n\n".join(outputs)
+            if result.returncode != 0:
+                if attempt == 1:
+                    time.sleep(10)
+                continue
+
+            verify_command = str(project_config.get("verifyCommand", ""))
+            if verify_command:
+                verify = subprocess.run(
+                    [verify_command],
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    capture_output=True,
+                    timeout=AUTO_DEPLOY_TIMEOUT_SECONDS,
+                    env=deploy_environment,
+                    check=False,
+                )
+                verify_output = compact((verify.stdout or "") + (verify.stderr or ""), 20_000)
+                outputs.append(f"verifyCommand exit={verify.returncode}\n{verify_output}".strip())
+                if verify.returncode != 0:
+                    if attempt == 1:
+                        time.sleep(10)
+                    continue
+
+            health_url = str(project_config.get("healthUrl", ""))
+            if health_url:
+                try:
+                    with request.urlopen(health_url, timeout=20) as response:
+                        health_body = compact(response.read().decode("utf-8", "replace"), 4000)
+                        outputs.append(f"healthUrl status={response.status}\n{health_body}".strip())
+                        if response.status < 200 or response.status >= 300:
+                            raise RuntimeError(f"unexpected health status {response.status}")
+                except Exception as exc:
+                    outputs.append(f"healthUrl failed: {exc}")
+                    if attempt == 1:
+                        time.sleep(10)
+                    continue
+
+            service = str(project_config.get("service", ""))
+            if service:
+                service_result = subprocess.run(
+                    ["systemctl", "is-active", service],
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    capture_output=True,
+                    timeout=30,
+                    check=False,
+                )
+                service_output = compact((service_result.stdout or "") + (service_result.stderr or ""), 4000)
+                outputs.append(f"service {service} exit={service_result.returncode}\n{service_output}".strip())
+                if service_result.returncode != 0 or service_result.stdout.strip() != "active":
+                    if attempt == 1:
+                        time.sleep(10)
+                    continue
+
+            deployed_sha = ""
+            probe = run_git(workspace, ["rev-parse", "HEAD"])
+            if probe.returncode == 0:
+                deployed_sha = probe.stdout.strip()
+            outputs.append(
+                "\n".join(
+                    [
+                        f"deployed SHA: {deployed_sha or 'unknown'}",
+                        "本番検証結果: ok",
+                    ]
+                )
+            )
+            return True, "\n\n".join(outputs)
         except subprocess.TimeoutExpired as exc:
             stdout = exc.stdout if isinstance(exc.stdout, str) else ""
             stderr = exc.stderr if isinstance(exc.stderr, str) else ""
@@ -484,8 +690,8 @@ def run_auto_deploy(job: dict[str, Any], workspace: Path, session_id: str, pid: 
                 f"auto-deploy attempt={attempt} timed out after {AUTO_DEPLOY_TIMEOUT_SECONDS}s\n" +
                 compact(stdout + stderr, 20_000)
             )
-        if attempt == 1:
-            time.sleep(10)
+            if attempt == 1:
+                time.sleep(10)
     return False, "\n\n".join(outputs)
 
 
@@ -598,22 +804,45 @@ def run_job(job: dict[str, Any]) -> None:
         if current and current.get("stage") == "stopped":
             LOG.info("job=%s was stopped before deployment", job_id)
             return
-        publish_ok, publish_output = publish_git_changes(job, git_context)
-        deploy_output = publish_output
+
+        publish_output = ""
+        deploy_output = ""
+        if git_context is None:
+            publish_ok, publish_output = publish_git_changes(job, git_context)
+            if publish_ok:
+                deploy_ok, deploy_output = run_auto_deploy(job, cwd, session_id, process.pid)
+            else:
+                deploy_ok = False
+        else:
+            lock_path = STATE_DIR / "locks" / f"{job['project']}-publish.lock"
+            lock_path.parent.mkdir(parents=True, exist_ok=True)
+            with lock_path.open("a+", encoding="utf-8") as lock_handle:
+                fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX)
+                publish_ok, publish_output = publish_git_changes(job, git_context)
+                if publish_ok:
+                    deploy_ok, deploy_output = run_auto_deploy(job, source_workspace, session_id, process.pid)
+                else:
+                    deploy_ok = False
+
+        combined_output = "\n".join(item for item in (publish_output, deploy_output) if item)
         if not publish_ok:
             failure = publish_output
             deployment_failed = True
-        else:
-            deploy_ok, deploy_output = run_auto_deploy(job, cwd, session_id, process.pid)
-            deploy_output = publish_output + "\n" + deploy_output
-            if not deploy_ok:
-                failure = "Automatic production deployment failed and was rolled back."
-                deployment_failed = True
+        elif not deploy_ok:
+            failure = "Automatic production deployment or verification failed."
+            deployment_failed = True
+
         with path.open("a", encoding="utf-8", errors="replace") as log_handle:
-            log_handle.write("\n\nAuto deploy:\n" + deploy_output + "\n")
+            log_handle.write("\n\nAuto deploy:\n" + combined_output + "\n")
         if not failure:
             update_progress(job_id, "verifying", "本番health・実画面・Git差分検証完了", session_id, process.pid, "VERIFY")
-            update_result(job_id, "done", "", "Completed by ChatGPT browser agent.\n" + deploy_output)
+            update_result(
+                job_id,
+                "done",
+                "",
+                "Completed by ChatGPT browser agent.\n" + combined_output,
+                verification_result=combined_output,
+            )
             cleanup_git_worktree(git_context)
             LOG.info("completed and deployed job=%s", job_id)
             return
