@@ -1,0 +1,17 @@
+{
+  "name": "pseudo-codex-console",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Web console for pseudo Codex job intake and progress display.",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node app.js",
+    "check": "npm run check:console && npm run check:agent",
+    "check:console": "node check.js",
+    "check:agent": "node tests/agent-no-sha.check.js && node tests/agent-controller.check.js",
+    "check:syntax": "node --check app.js && node --check agent/agent.js && node --check agent/chatgpt.js && node --check agent/mcp-server.js"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

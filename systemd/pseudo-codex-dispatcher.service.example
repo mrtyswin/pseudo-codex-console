@@ -1,0 +1,19 @@
+[Unit]
+Description=Pseudo Codex job dispatcher
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=-/etc/pseudo-codex/dispatcher.env
+Environment=PSEUDO_CODEX_CONSOLE_URL=http://127.0.0.1:8090
+Environment=PSEUDO_CODEX_AGENT=/usr/local/bin/chatgpt-browser-agent
+Environment=PSEUDO_CODEX_PROJECT_ROOT=/srv/pseudo-codex/projects
+Environment=PSEUDO_CODEX_PROJECT_CONFIG=/etc/pseudo-codex/projects.json
+Environment=PSEUDO_CODEX_STATE_DIR=%h/.local/state/pseudo-codex
+ExecStart=/usr/bin/python3 /opt/pseudo-codex/dispatcher/dispatcher.py
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target

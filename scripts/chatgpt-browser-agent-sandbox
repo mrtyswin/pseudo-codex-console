@@ -1,0 +1,170 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+repo=/home/ubuntu/chatgpt-browser-agent
+sandbox_cwd=/mnt/workspace
+compose_root=/home/ubuntu/chatgpt-projects
+compose_runtime=/run/user/1000/chatgpt-compose
+agent_sessions_root=/home/ubuntu/.local/state/pseudo-codex/sessions
+host_cwd=$PWD
+declare -a agent_args=()
+declare -a compose_mount_args=()
+declare -a compose_env_args=()
+declare -a agent_session_mount_args=()
+compose_session_file=
+agent_session_file=
+
+cleanup() {
+  if [[ -n "$compose_session_file" ]]; then
+    rm -f -- "$compose_session_file"
+  fi
+}
+trap cleanup EXIT
+
+while (($#)); do
+  case "$1" in
+    --cwd)
+      if (($# < 2)); then
+        echo "--cwd requires a directory" >&2
+        exit 2
+      fi
+      host_cwd=$2
+      agent_args+=(--cwd "$sandbox_cwd")
+      shift 2
+      ;;
+    --cwd=*)
+      host_cwd=${1#--cwd=}
+      agent_args+=(--cwd "$sandbox_cwd")
+      shift
+      ;;
+    --session-file)
+      if (($# < 2)); then
+        echo "--session-file requires a path" >&2
+        exit 2
+      fi
+      agent_session_file=$2
+      agent_args+=(--session-file "$agent_session_file")
+      shift 2
+      ;;
+    --session-file=*)
+      agent_session_file=${1#--session-file=}
+      agent_args+=(--session-file "$agent_session_file")
+      shift
+      ;;
+    *)
+      agent_args+=("$1")
+      shift
+      ;;
+  esac
+done
+
+host_cwd=$(realpath -e -- "$host_cwd")
+if [[ ! -d "$host_cwd" ]]; then
+  echo "Sandbox working directory is not a directory: $host_cwd" >&2
+  exit 2
+fi
+
+case "$host_cwd" in
+  /|/boot|/dev|/etc|/home|/home/ubuntu|/proc|/root|/run|/sys|/usr|/var)
+    echo "Refusing to mount a system directory read-write: $host_cwd" >&2
+    echo "Use run-host only when host-level access is intentional." >&2
+    exit 2
+    ;;
+esac
+
+if [[ -n "$agent_session_file" ]]; then
+  case "$agent_session_file" in
+    "$agent_sessions_root"/*/*.url) ;;
+    *)
+      echo "Session file is outside the per-job session root: $agent_session_file" >&2
+      exit 2
+      ;;
+  esac
+  agent_session_dir=$(dirname -- "$agent_session_file")
+  mkdir -p -- "$agent_session_dir"
+  agent_session_mount_args=(
+    --dir /home/ubuntu/.local
+    --dir /home/ubuntu/.local/state
+    --dir /home/ubuntu/.local/state/pseudo-codex
+    --dir "$agent_sessions_root"
+    --dir "$agent_session_dir"
+    --bind "$agent_session_dir" "$agent_session_dir"
+  )
+fi
+
+/usr/local/bin/chatgpt-browser-agent start >/dev/null
+
+daemon_state=/home/ubuntu/.chatgpt-poc-daemon.json
+daemon_port=$(node -e '
+  const fs = require("fs");
+  const state = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+  if (!Number.isInteger(state.port) || state.port < 1 || state.port > 65535) process.exit(1);
+  process.stdout.write(String(state.port));
+' "$daemon_state")
+
+if [[ "$host_cwd" == "$compose_root"/* ]]; then
+  bridge_socket="$compose_runtime/bridge.sock"
+  sessions_dir="$compose_runtime/sessions"
+  if [[ ! -S "$bridge_socket" || ! -d "$sessions_dir" ]]; then
+    echo "Docker Compose bridge is not available." >&2
+    exit 1
+  fi
+  compose_token=$(python3 -c 'import secrets; print(secrets.token_hex(32))')
+  compose_session_file="$sessions_dir/$compose_token.json"
+  python3 - "$compose_session_file" "$host_cwd" <<'PY'
+import json
+import os
+from pathlib import Path
+import sys
+import time
+
+session_file = Path(sys.argv[1])
+project = str(Path(sys.argv[2]).resolve())
+fd = os.open(session_file, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+with os.fdopen(fd, "w", encoding="utf-8") as handle:
+    json.dump({"expires": time.time() + 43200, "project": project}, handle)
+PY
+  compose_mount_args=(
+    --bind "$bridge_socket" /opt/chatgpt-compose-bridge.sock
+  )
+  compose_env_args=(
+    --setenv CHATGPT_COMPOSE_SOCKET /opt/chatgpt-compose-bridge.sock
+    --setenv CHATGPT_COMPOSE_TOKEN "$compose_token"
+  )
+fi
+
+bwrap \
+  --unshare-all \
+  --share-net \
+  --die-with-parent \
+  --new-session \
+  --cap-drop ALL \
+  --hostname chatgpt-agent-sandbox \
+  --ro-bind / / \
+  --tmpfs /opt \
+  --ro-bind "$repo" /opt/chatgpt-browser-agent \
+  "${compose_mount_args[@]}" \
+  --tmpfs /mnt \
+  --bind "$host_cwd" "$sandbox_cwd" \
+  --tmpfs /home \
+  --dir /home/ubuntu \
+  "${agent_session_mount_args[@]}" \
+  --tmpfs /root \
+  --tmpfs /run \
+  --tmpfs /tmp \
+  --tmpfs /media \
+  --tmpfs /srv \
+  --proc /proc \
+  --dev /dev \
+  --clearenv \
+  "${compose_env_args[@]}" \
+  --setenv HOME /home/ubuntu \
+  --setenv USER ubuntu \
+  --setenv LOGNAME ubuntu \
+  --setenv PATH /usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+  --setenv LANG C.UTF-8 \
+  --setenv LC_ALL C.UTF-8 \
+  --setenv TMPDIR /tmp \
+  --setenv CHATGPT_DAEMON_PORT "$daemon_port" \
+  --chdir "$sandbox_cwd" \
+  node /opt/chatgpt-browser-agent/agent.js "${agent_args[@]}"

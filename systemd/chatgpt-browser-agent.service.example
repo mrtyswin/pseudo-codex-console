@@ -1,0 +1,16 @@
+[Unit]
+Description=ChatGPT browser agent daemon
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+Environment=DISPLAY=:99
+Environment=XAUTHORITY=/run/chatgpt-browser-display/Xauthority
+Environment=CHATGPT_BROWSER_AGENT_HOME=/opt/pseudo-codex/agent
+ExecStart=/usr/bin/node /opt/pseudo-codex/agent/chatgpt.js --daemon-internal
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target

@@ -1,0 +1,70 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+project=${PSEUDO_CODEX_JOB_WORKSPACE:-/home/ubuntu/chatgpt-projects/request-console}
+source_app="$project/app.js"
+production_app=/opt/pseudo-codex-console/app.js
+validator_root=/usr/local/lib/pseudo-codex-console-deploy
+state_root=/home/ubuntu/.local/state/pseudo-codex
+timestamp=$(date +%Y%m%d-%H%M%S)
+backup_app="${production_app}.before-auto-${timestamp}"
+staged_app="${production_app}.auto-${timestamp}"
+deployed=0
+
+mkdir -p "$state_root"
+exec 9>"$state_root/deploy-request-console.lock"
+if ! flock -n 9; then
+  printf '%s\n' 'AUTO_DEPLOY_FAILED another deployment is already running'
+  exit 75
+fi
+
+rollback() {
+  status=$?
+  if ((deployed)) && [[ -f "$backup_app" ]]; then
+    cp --preserve=mode,timestamps -- "$backup_app" "$production_app"
+    sudo -n /usr/bin/systemctl restart pseudo-codex-console.service || true
+  fi
+  rm -f -- "$staged_app"
+  printf '%s\n' "AUTO_DEPLOY_ROLLED_BACK status=$status backup=$backup_app"
+  exit "$status"
+}
+trap rollback ERR
+
+source_hash=$(sha256sum "$source_app" | awk '{print $1}')
+production_hash=$(sha256sum "$production_app" | awk '{print $1}')
+if [[ "$source_hash" == "$production_hash" ]]; then
+  printf '%s\n' 'AUTO_DEPLOY_NO_CHANGES'
+  exit 0
+fi
+
+node --check "$source_app"
+APP_PATH="$source_app" node "$validator_root/check.js"
+
+cp --preserve=mode,timestamps -- "$production_app" "$backup_app"
+install -m 0644 -- "$source_app" "$staged_app"
+mv -- "$staged_app" "$production_app"
+deployed=1
+sudo -n /usr/bin/systemctl restart pseudo-codex-console.service
+
+python3 - <<'PY'
+import json
+import time
+import urllib.request
+
+for _ in range(50):
+    try:
+        with urllib.request.urlopen("http://127.0.0.1:8090/health", timeout=2) as response:
+            payload = json.load(response)
+        if payload.get("status") == "ok":
+            break
+    except Exception:
+        time.sleep(0.2)
+else:
+    raise SystemExit("health check failed")
+PY
+
+node "$validator_root/verify-live.js"
+production_hash=$(sha256sum "$production_app" | awk '{print $1}')
+test "$source_hash" = "$production_hash"
+trap - ERR
+printf '%s\n' "AUTO_DEPLOY_OK backup=$backup_app"

@@ -1,0 +1,22 @@
+[Unit]
+Description=Pseudo Codex Console
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=pseudo-codex
+Group=pseudo-codex
+EnvironmentFile=-/etc/pseudo-codex/console.env
+Environment=PORT=8090
+Environment=DATA_PATH=/var/lib/pseudo-codex/jobs.json
+Environment=PROJECT_CONFIG_PATH=/etc/pseudo-codex/projects.json
+Environment=RESULT_LOG_ROOT=/var/lib/pseudo-codex/job-logs
+ExecStart=/usr/bin/node /opt/pseudo-codex/app.js
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

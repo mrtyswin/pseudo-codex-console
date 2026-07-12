@@ -1,0 +1,20 @@
+{
+  "request-console": {
+    "workspace": "/path/to/request-console",
+    "sandboxWorkspace": "/mnt/workspace",
+    "productionRoot": "/path/to/production-root",
+    "deployCommand": "/path/to/deploy-command",
+    "verifyCommand": "/path/to/verify-command",
+    "service": "pseudo-codex-console.service",
+    "healthUrl": "http://127.0.0.1:8090/health",
+    "deploymentOwner": "host_dispatcher",
+    "requiresDeployment": true,
+    "git": {
+      "enabled": false,
+      "remote": "origin",
+      "baseBranch": "main",
+      "branchPrefix": "chatgpt-job",
+      "push": false
+    }
+  }
+}

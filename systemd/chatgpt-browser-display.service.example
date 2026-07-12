@@ -1,0 +1,18 @@
+[Unit]
+Description=Virtual display for ChatGPT browser agent
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=pseudo-codex
+Group=pseudo-codex
+ExecStart=/usr/local/libexec/chatgpt-browser-display
+Restart=on-failure
+RestartSec=3
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
