@@ -1046,7 +1046,10 @@ function restoreCard(card) {
   if (!history) return;
   var state = historyState(history.dataset.historyJobId);
   var log = history.querySelector('.history-log');
-  if (log) requestAnimationFrame(function () { log.scrollTop = state.scrollTop; });
+  if (log) requestAnimationFrame(function () {
+    log.scrollTop = state.paused ? state.scrollTop : log.scrollHeight;
+    state.scrollTop = log.scrollTop;
+  });
 }
 
 function applyFilters() {
@@ -1092,6 +1095,7 @@ async function refreshJobs() {
         existing = holder.firstElementChild;
         var reference = container.children[index] || null;
         container.insertBefore(existing, reference);
+        restoreCard(existing);
       }
     });
     applyFilters();
@@ -1121,6 +1125,16 @@ document.addEventListener('toggle', function (event) {
   var node = event.target;
   if (node && node.matches && node.matches('details[data-detail-key]')) {
     detailStates.set(node.dataset.detailKey, node.open);
+    if (node.open && node.matches('details.history-details')) {
+      var state = historyState(node.dataset.historyJobId);
+      var log = node.querySelector('.history-log');
+      if (log && !state.paused) {
+        requestAnimationFrame(function () {
+          log.scrollTop = log.scrollHeight;
+          state.scrollTop = log.scrollTop;
+        });
+      }
+    }
   }
 }, true);
 
