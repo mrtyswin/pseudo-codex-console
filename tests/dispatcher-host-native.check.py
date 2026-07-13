@@ -54,16 +54,13 @@ with tempfile.TemporaryDirectory() as temporary:
     launcher.chmod(0o755)
     assert module.verify_agent_launcher() == launcher.resolve()
 
-    try:
-        module.prepare_job_workspace(
-            {"id": "host-native", "project": "request-console"},
-            resolved,
-            config["request-console"],
-        )
-    except RuntimeError as exc:
-        assert "REQUEST_CONSOLE_CODEX_CLI_ONLY" in str(exc)
-    else:
-        raise AssertionError("request-console self-maintenance was accepted by the browser dispatcher")
+    job_workspace, git_context = module.prepare_job_workspace(
+        {"id": "host-native", "project": "request-console"},
+        resolved,
+        config["request-console"],
+    )
+    assert job_workspace == resolved
+    assert git_context is None
 
     verify_config = dict(config["request-console"], executionMode="verify_only")
     assert module.prepare_job_workspace(
