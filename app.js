@@ -1976,9 +1976,10 @@ push: git.push === true
 function projectSummary(name, projectConfig) {
 const config = projectConfig && typeof projectConfig === "object" ? projectConfig : {};
 const git = projectGitConfig(config);
-const executionMode = ["github_direct", "local", "verify_only"].includes(config.executionMode)
+const configuredExecutionMode = ["github_direct", "local", "verify_only"].includes(config.executionMode)
 ? config.executionMode
 : (git.enabled && git.repository ? "github_direct" : "local");
+const executionMode = CODEX_CLI_ONLY_PROJECTS.has(name) ? "verify_only" : configuredExecutionMode;
 return {
 name,
 executionMode,
