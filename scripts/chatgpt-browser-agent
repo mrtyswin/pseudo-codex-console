@@ -21,8 +21,8 @@ usage() {
 Usage:
   chatgpt-browser-agent login
   chatgpt-browser-agent ask [chatgpt.js options] "prompt"
-  chatgpt-browser-agent run [agent.js options] "task"       # sandboxed
-  chatgpt-browser-agent run-host [agent.js options] "task"  # unsandboxed escape hatch
+  chatgpt-browser-agent run [agent.js options] "task"       # Ubuntu host-native
+  chatgpt-browser-agent run-host [agent.js options] "task"  # compatibility alias
   chatgpt-browser-agent start
   chatgpt-browser-agent status
   chatgpt-browser-agent stop
@@ -41,11 +41,7 @@ case "$command_name" in
   ask)
     exec node "$repo/chatgpt.js" "$@"
     ;;
-  run)
-    exec /usr/local/libexec/chatgpt-browser-agent-sandbox "$@"
-    ;;
-  run-host)
-    echo "WARNING: running without filesystem or process isolation." >&2
+  run|run-host)
     exec node "$repo/agent.js" "$@"
     ;;
   start)
