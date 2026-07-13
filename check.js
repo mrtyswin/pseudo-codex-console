@@ -196,6 +196,10 @@ const manualContinuation = await postJson("/api/jobs/" + failedCreated.id + "/re
 assert.equal(manualContinuation.id, failed.continuationJobId);
 const claimedContinuation = await claim();
 assert.equal(claimedContinuation.id, continuation.id);
+const recoverActive = await fetchWithRetry("/api/jobs/" + continuation.id + "/recover", {
+method: "POST", headers: {"Content-Type": "application/json"}, body: "{}"
+});
+assert.equal(recoverActive.status, 409, "an active job must not create a parallel continuation");
 const staleProgress = await postJson("/api/jobs/" + continuation.id + "/progress", {
 stage: "writing_file",
 message: "stale worker update",

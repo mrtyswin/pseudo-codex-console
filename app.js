@@ -2670,6 +2670,14 @@ return null;
 if (!["stopped", "failed", "blocked"].includes(job.stage)) {
 return job;
 }
+const activeDescendant = jobs.some(function(candidate) {
+return candidate.parentJobId === job.id &&
+  ["queued", "sending_to_chatgpt", "waiting_chatgpt", "executing_command", "writing_file", "verifying"].includes(candidate.stage);
+});
+if (activeDescendant) {
+appendHistory(job, job.stage, job.assignee, "継続ジョブが未完了のため元ジョブの再実行を拒否");
+return job;
+}
 job.workerId = "";
 job.sessionId = "";
 job.pid = null;
@@ -2818,6 +2826,7 @@ const job = jobs.find(function(candidate) {
 return candidate.id === id;
 });
 if (!job) return null;
+if (!["failed", "blocked"].includes(job.stage)) return null;
 return createContinuationJob(
 jobs,
 job,
