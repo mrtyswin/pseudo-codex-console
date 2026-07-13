@@ -56,6 +56,14 @@ compare_files() {
   cmp -s -- "$src" "$dest"
 }
 
+require_executable() {
+  local path=$1
+  [[ -x "$path" ]] || {
+    printf '%s\n' "AUTO_DEPLOY_FAILED required executable is not executable: $path"
+    exit 2
+  }
+}
+
 backup_target() {
   local dest=$1
   local backup="$backup_root${dest}"
@@ -129,6 +137,10 @@ for spec in "${required_mirrors[@]}"; do
     printf '%s\n' "AUTO_DEPLOY_FAILED bootstrap mismatch: $dest"
     exit 2
   }
+  if [[ "$src" == "$project/scripts/chatgpt-browser-agent" ]]; then
+    require_executable "$src"
+    require_executable "$dest"
+  fi
 done
 
 for spec in "${writable_specs[@]}"; do

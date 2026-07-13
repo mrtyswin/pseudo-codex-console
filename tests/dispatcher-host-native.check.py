@@ -41,6 +41,19 @@ with tempfile.TemporaryDirectory() as temporary:
     else:
         raise AssertionError("disabled workspace was accepted")
 
+    launcher = root / "chatgpt-browser-agent"
+    launcher.write_text("#!/usr/bin/env bash\n", encoding="utf-8")
+    launcher.chmod(0o644)
+    module.AGENT = str(launcher)
+    try:
+        module.verify_agent_launcher()
+    except RuntimeError as exc:
+        assert "AGENT_LAUNCHER_NOT_EXECUTABLE" in str(exc)
+    else:
+        raise AssertionError("non-executable launcher was accepted")
+    launcher.chmod(0o755)
+    assert module.verify_agent_launcher() == launcher.resolve()
+
     task = module.task_for(
         {"id": "host-native", "project": "request-console", "title": "ssh", "instruction": "ssh今とじてるん？"},
         config["request-console"],
@@ -51,5 +64,6 @@ with tempfile.TemporaryDirectory() as temporary:
     source = dispatcher_path.read_text(encoding="utf-8")
     assert '"--host-native"' in source
     assert "AUTO_DEPLOY_SKIPPED_NO_CHANGES" in source
+    assert "AGENT_LAUNCHER_NOT_EXECUTABLE" in source
 
 print("DISPATCHER_HOST_NATIVE_EXECUTION_OK")

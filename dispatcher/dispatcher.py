@@ -192,6 +192,23 @@ def ensure_host_native_workspace(workspace: Path) -> None:
         raise RuntimeError("SANDBOX_WORKSPACE_DISABLED: jobs must run on the Ubuntu host workspace")
 
 
+def verify_agent_launcher() -> Path:
+    """Fail before claiming work if the configured agent cannot be executed."""
+    launcher = Path(AGENT)
+    try:
+        resolved = launcher.resolve(strict=True)
+    except OSError as exc:
+        raise RuntimeError(f"AGENT_LAUNCHER_UNAVAILABLE: {launcher}: {exc}") from exc
+    if not resolved.is_file():
+        raise RuntimeError(f"AGENT_LAUNCHER_UNAVAILABLE: {launcher} does not resolve to a regular file")
+    if not os.access(launcher, os.X_OK):
+        raise RuntimeError(
+            f"AGENT_LAUNCHER_NOT_EXECUTABLE: {launcher} -> {resolved}; "
+            "restore execute permission before submitting jobs"
+        )
+    return resolved
+
+
 def run_git(workspace: Path, args: list[str], timeout: int = 120) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         ["git", "-C", str(workspace), *args],
@@ -983,6 +1000,19 @@ def run_job(job: dict[str, Any]) -> None:
         update_result(job_id, "needs_human", str(exc), "Dispatcher rejected the project path.")
         return
 
+    try:
+        verify_agent_launcher()
+    except RuntimeError as exc:
+        message = str(exc)
+        update_result(
+            job_id,
+            "needs_human",
+            message,
+            "Dispatcher preflight failed before ChatGPT was started. No retry was scheduled.\n" + message,
+        )
+        LOG.error("job=%s launcher preflight failed: %s", job_id, message)
+        return
+
     session_path = job_session_path(job_id)
     if job.get("forceNewConversation") and session_path.exists():
         session_path.unlink()
@@ -1024,16 +1054,29 @@ def run_job(job: dict[str, Any]) -> None:
     deployment_failed = False
 
     with path.open("w", encoding="utf-8", errors="replace") as log_handle:
-        process = subprocess.Popen(
-            command,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            stdin=subprocess.PIPE,
-            stdout=log_handle,
-            stderr=subprocess.STDOUT,
-            start_new_session=True,
-        )
+        try:
+            process = subprocess.Popen(
+                command,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                stdin=subprocess.PIPE,
+                stdout=log_handle,
+                stderr=subprocess.STDOUT,
+                start_new_session=True,
+            )
+        except OSError as exc:
+            message = f"AGENT_LAUNCH_FAILED: {exc}"
+            log_handle.write(message + "\n")
+            log_handle.flush()
+            update_result(
+                job_id,
+                "needs_human",
+                message,
+                "Dispatcher could not start the ChatGPT agent. No retry was scheduled.\n" + message,
+            )
+            LOG.error("job=%s agent launch failed: %s", job_id, message)
+            return
         assert process.stdin is not None
         process.stdin.write(task_for(job, project_config))
         process.stdin.close()

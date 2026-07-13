@@ -1,6 +1,7 @@
 "use strict";
 
 const assert = require("node:assert/strict");
+const childProcess = require("node:child_process");
 const fs = require("node:fs");
 const path = require("node:path");
 const agent = require("../agent/agent");
@@ -28,6 +29,12 @@ assert.doesNotMatch(source, /HOST_ONLY_COMMAND_DEFERRED: the sandbox/);
 const launcher = fs.readFileSync(path.join(root, "scripts", "chatgpt-browser-agent"), "utf8");
 assert.match(launcher, /run\|run-host\)[\s\S]*exec node "\$repo\/agent\.js"/);
 assert.doesNotMatch(launcher, /libexec\/chatgpt-browser-agent-sandbox|\bbwrap\b|--unshare-all/);
+const launcherIndex = childProcess.execFileSync(
+  "git",
+  ["ls-files", "--stage", "scripts/chatgpt-browser-agent"],
+  { cwd: root, encoding: "utf8" }
+);
+assert.match(launcherIndex, /^100755 /, "launcher must be tracked as executable");
 assert.equal(
   fs.existsSync(path.join(root, "scripts", "chatgpt-browser-agent-sandbox")),
   false,
