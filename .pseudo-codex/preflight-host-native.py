@@ -19,6 +19,15 @@ for old, new in replacements.items():
         raise RuntimeError(f"expected one match, found {count}: {old!r}")
     text = text.replace(old, new, 1)
 
+for marker in (
+    "    '''    `Task: ${task}\\n` +",
+    "    '''    `- After file blocks, briefly explain what you changed and why.\\n` +",
+):
+    count = text.count(marker)
+    if count != 2:
+        raise RuntimeError(f"expected two JavaScript literal blocks, found {count}: {marker!r}")
+    text = text.replace(marker, marker.replace("    '''", "    r'''"))
+
 obsolete = '''replace_once(
     "dispatcher/dispatcher.py",
     '                "Do not inspect or execute host-only deployment paths; the host dispatcher deploys after TASK_COMPLETE.",',
