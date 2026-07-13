@@ -13,5 +13,7 @@ assert.doesNotMatch(source, /'\/project'/);
 assert.match(source, /activeSessionFile === SESSION_FILE \? CHATGPT_URL : newChatUrl\(\)/);
 assert.match(source, /button\[data-testid="send-button"\]/);
 assert.match(source, /Submitted via send button/);
+assert.match(source, /CHATGPT_SEND_BUTTON_UNAVAILABLE after prompt input/);
+assert.doesNotMatch(source, /keyboard\.press\(['"]Enter['"]\)/);
 
 console.log("CHATGPT_NEW_CHAT_ROUTE_OK");
