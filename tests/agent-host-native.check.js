@@ -40,5 +40,7 @@ assert.equal(
   false,
   "legacy project sandbox launcher must be removed"
 );
+assert.match(source, /workerSessionId: process\.env\.PSEUDO_CODEX_WORKER_SESSION_ID/);
+assert.match(source, /function workerIdentity\(args\)/);
 
 console.log("AGENT_HOST_NATIVE_EXECUTION_OK");

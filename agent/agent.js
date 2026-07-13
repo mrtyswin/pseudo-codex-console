@@ -72,6 +72,8 @@ function parseArgs(argv) {
     consoleUrl: process.env.PSEUDO_CODEX_CONSOLE_URL || null,
     sessionFile: process.env.PSEUDO_CODEX_SESSION_FILE || null,
     sessionKey: process.env.PSEUDO_CODEX_SESSION_KEY || null,
+    workerId: process.env.PSEUDO_CODEX_WORKER_ID || '',
+    workerSessionId: process.env.PSEUDO_CODEX_WORKER_SESSION_ID || '',
     hostWorkspace: null,
     hostProductionRoot: null,
     hostDeployCommand: null,
@@ -94,6 +96,8 @@ function parseArgs(argv) {
     else if (argv[i] === '--console-url') args.consoleUrl = argv[++i];
     else if (argv[i] === '--session-file') args.sessionFile = argv[++i];
     else if (argv[i] === '--session-key') args.sessionKey = argv[++i];
+    else if (argv[i] === '--worker-id') args.workerId = argv[++i];
+    else if (argv[i] === '--worker-session-id') args.workerSessionId = argv[++i];
     else if (argv[i] === '--host-workspace') args.hostWorkspace = argv[++i];
     else if (argv[i] === '--host-production-root') args.hostProductionRoot = argv[++i];
     else if (argv[i] === '--host-deploy-command') args.hostDeployCommand = argv[++i];
@@ -196,12 +200,21 @@ function jobEndpoint(args, suffix) {
   );
 }
 
+function workerIdentity(args) {
+  return {
+    workerId: args.workerId || '',
+    sessionId: args.workerSessionId || '',
+    pid: process.pid,
+    leaseSeconds: 120,
+  };
+}
+
 async function reportProgress(args, stage, message, extra = {}) {
   const endpoint = jobEndpoint(args, 'progress');
   if (!endpoint) return;
 
   try {
-    await postJson(endpoint, { stage, message, ...extra });
+    await postJson(endpoint, { stage, message, ...workerIdentity(args), ...extra });
   } catch (error) {
     console.error('[progress warning] ' + error.message);
   }
@@ -212,7 +225,7 @@ async function reportResult(args, payload) {
   if (!endpoint) return;
 
   try {
-    await postJson(endpoint, payload);
+    await postJson(endpoint, { ...workerIdentity(args), ...payload });
   } catch (error) {
     console.error('[result warning] ' + error.message);
   }

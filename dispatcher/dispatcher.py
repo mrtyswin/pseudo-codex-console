@@ -1038,6 +1038,10 @@ def run_job(job: dict[str, Any]) -> None:
         str(cwd),
         "--task-stdin",
         "--host-native",
+        "--worker-id",
+        WORKER_ID,
+        "--worker-session-id",
+        session_id,
     ]
     execution_mode = str(project_config.get("executionMode", "local"))
     git_config = project_config.get("git", {})
