@@ -11,7 +11,7 @@ Environment=PSEUDO_CODEX_AGENT=/usr/local/bin/chatgpt-browser-agent
 Environment=PSEUDO_CODEX_PROJECT_ROOT=/srv/pseudo-codex/projects
 Environment=PSEUDO_CODEX_PROJECT_CONFIG=/etc/pseudo-codex/projects.json
 Environment=PSEUDO_CODEX_STATE_DIR=%h/.local/state/pseudo-codex
-Environment=PSEUDO_CODEX_MAX_WORKERS=1
+Environment=PSEUDO_CODEX_MAX_WORKERS=2
 ExecStart=/usr/bin/python3 /opt/pseudo-codex/dispatcher/dispatcher.py
 Restart=always
 RestartSec=5

@@ -20,6 +20,8 @@
 
 ホスト状態の質問では、`ss`、`systemctl status`、`ps`、`/proc`などをUbuntu実ホストで確認します。ファイル変更がないジョブではGit公開と本番配備を自動的にスキップします。
 
+dispatcher は2 workerで動作し、異なるプロジェクトまたはGitの専用worktreeを持つジョブを並列処理します。各ジョブは専用のChatGPT page、session key、conversation fileを持ちます。同じ非Git workspaceのジョブは競合防止のため直列のままです。
+
 ## 編集プロトコル
 
 ChatGPTにSHA256を転記させません。既存ファイルは通常のunified diff、短い完全一致編集、または完全なファイル内容で更新できます。Ubuntu側が安全な相対パス、パッチ適用可否、テスト結果を検証します。

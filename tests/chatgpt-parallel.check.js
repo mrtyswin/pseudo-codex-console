@@ -8,12 +8,15 @@ const path = require("node:path");
 
 const root = path.resolve(__dirname, "..");
 const script = path.join(root, "agent", "chatgpt.js");
+const source = fs.readFileSync(script, "utf8");
 const adapter = path.join(root, "agent", "fake-browser-client.js");
 const home = fs.mkdtempSync(path.join(os.tmpdir(), "pseudo-codex-chatgpt-test-"));
 const env = Object.assign({}, process.env, {
   HOME: home,
   PSEUDO_CODEX_BROWSER_CLIENT: adapter,
 });
+
+assert.doesNotMatch(source, /bringToFront\(/, "parallel pages must not steal browser focus");
 
 function run(args) {
   return new Promise((resolve, reject) => {

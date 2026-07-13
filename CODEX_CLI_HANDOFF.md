@@ -32,7 +32,7 @@ Do not use the request-console browser queue to modify request-console itself. S
 
 - Normal queued jobs execute on the real Ubuntu host.
 - `request-console` self-maintenance is Codex CLI-only and GitHub-first. Ubuntu `main` only fast-forwards and deploys; it never authors commits.
-- A single logged-in ChatGPT browser is one external interaction channel. `PSEUDO_CODEX_MAX_WORKERS=1` is required. Jobs may queue, but must not run in parallel through one Chrome profile.
+- The shared logged-in ChatGPT browser runs two isolated job pages (`PSEUDO_CODEX_MAX_WORKERS=2`). Each job has its own session key and conversation file. Non-Git jobs for the same project remain serialized; different projects and Git-isolated worktrees may run concurrently.
 - The dispatcher is the sole owner of terminal job states. The browser agent emits progress and markers only; it must not independently mark jobs done, failed, or blocked.
 - Browser agent runtime files are deployed from `agent/agent.js` and `agent/chatgpt.js`.
 
@@ -41,7 +41,7 @@ Do not use the request-console browser queue to modify request-console itself. S
 - Browser prompts use the ChatGPT send button, with Enter only as fallback.
 - New browser jobs start at `https://chatgpt.com/`, because the prior GPT `/project` route is a chat list and does not reliably start a conversation.
 - Retry and auto-continuation were previously racing. This has been fixed by centralizing terminal decisions in the dispatcher.
-- Browser responses remain externally intermittent. A missing or disabled send button must be recorded as a transport issue; do not start multiple browser workers to compensate.
+- Browser responses remain externally intermittent. A failed session must not restart the shared browser while another session is active; retry only the affected job.
 
 ## Immediate Verification Plan
 
@@ -53,7 +53,7 @@ Run these one at a time on project `agent-architecture-smoke`:
 4. Delete that file, verify absence.
 5. Stop a running disposable job, confirm no queued/running descendants remain.
 
-Do not claim parallel browser execution is supported unless separate browser profiles and independent authenticated sessions are implemented and tested.
+Do not raise the worker pool above two without repeating the live overlap, isolation, stop, and same-project serialization checks.
 
 ## Useful Diagnostics
 

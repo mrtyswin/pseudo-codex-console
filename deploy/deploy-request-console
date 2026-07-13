@@ -19,6 +19,7 @@ declare -a writable_specs=(
   "$project/dispatcher/dispatcher.py|$dispatcher_runtime|0644|dispatcher"
   "$project/agent/agent.js|$agent_runtime_root/agent.js|0644|agent"
   "$project/agent/chatgpt.js|$agent_runtime_root/chatgpt.js|0644|agent"
+  "$project/systemd/pseudo-codex-dispatcher.service.d/20-browser-pool.conf|/home/ubuntu/.config/systemd/user/pseudo-codex-dispatcher.service.d/20-browser-pool.conf|0644|dispatcher"
 )
 
 declare -a required_mirrors=(
@@ -123,7 +124,7 @@ schedule_dispatcher_restart() {
   if ((dispatcher_restart_scheduled)); then
     return 0
   fi
-  nohup bash -lc 'sleep 2; systemctl --user restart pseudo-codex-dispatcher.service' >/dev/null 2>&1 &
+  nohup bash -lc 'sleep 2; systemctl --user daemon-reload; systemctl --user restart pseudo-codex-dispatcher.service' >/dev/null 2>&1 &
   dispatcher_restart_scheduled=1
 }
 

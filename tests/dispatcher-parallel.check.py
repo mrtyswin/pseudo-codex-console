@@ -19,6 +19,7 @@ with tempfile.TemporaryDirectory() as temporary:
     os.environ["PSEUDO_CODEX_PROJECT_CONFIG"] = str(config_path)
     os.environ["PSEUDO_CODEX_PROJECT_ROOT"] = str(project_root)
     os.environ["PSEUDO_CODEX_STATE_DIR"] = str(Path(temporary) / "state")
+    os.environ["PSEUDO_CODEX_MAX_WORKERS"] = "2"
 
     spec = importlib.util.spec_from_file_location("dispatcher_under_test", root / "dispatcher" / "dispatcher.py")
     module = importlib.util.module_from_spec(spec)
@@ -33,7 +34,10 @@ with tempfile.TemporaryDirectory() as temporary:
     module.api_json = fake_api
     assert module.claim_next_job({"request-console"}) is None
     assert captured["excludedProjects"] == ["request-console"]
-    assert module.MAX_WORKERS >= 1
+    assert module.MAX_WORKERS == 2
     assert module.project_allows_parallel("request-console") is False
+    recovery = module.recover_browser_after_failure()
+    assert "BROWSER_RESTART_SKIPPED_SHARED_DAEMON" in recovery
+    assert "systemctl" not in recovery
 
 print("DISPATCHER_PARALLEL_POOL_OK")
