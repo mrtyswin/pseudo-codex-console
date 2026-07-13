@@ -11,6 +11,7 @@ assert.match(source, /<details class="settings-details" id="settings-section">/)
 assert.match(source, /<summary>プロジェクト設定を表示<\/summary>/);
 assert.match(source, /<summary>プロジェクトを追加・更新<\/summary>/);
 assert.match(source, /class="settings-content"/);
+assert.match(source, /\.topbar-actions \.primary-button\{flex:0 0 auto;white-space:nowrap;writing-mode:horizontal-tb\}/);
 assert.match(source, /ChatGPTとのやり取り/);
 assert.match(source, /name="executionMode"/);
 assert.match(source, /Codex CLI.*専用 branch \/ PR/);
