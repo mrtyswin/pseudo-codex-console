@@ -47,10 +47,27 @@ PROJECT_CONFIG_PATH = Path(
 )
 PROJECT_PATTERN = re.compile(r"^[a-z0-9][a-z0-9-]{0,63}$")
 COMPLETE_MARKER = "===TASK_COMPLETE==="
+BLOCKED_MARKER = "===AGENT_BLOCKED==="
+FATAL_MARKER = "===AGENT_FATAL==="
 BROWSER_SERVICE = os.environ.get("PSEUDO_CODEX_BROWSER_SERVICE", "chatgpt-browser-agent.service")
 WORKER_ID = os.environ.get("PSEUDO_CODEX_WORKER_ID", f"{socket.gethostname()}-{os.getpid()}")
 MAX_WORKERS = max(1, int(os.environ.get("PSEUDO_CODEX_MAX_WORKERS", "3")))
 GITHUB_FIRST_PROJECTS = {"request-console"}
+
+
+def agent_marker(output: str, marker: str) -> dict[str, str] | None:
+    """Read the last structured terminal hint emitted by the browser agent."""
+    for line in reversed(output.splitlines()):
+        if not line.startswith(marker):
+            continue
+        try:
+            value = json.loads(line[len(marker) :])
+        except json.JSONDecodeError:
+            return {}
+        if not isinstance(value, dict):
+            return {}
+        return {str(key): str(item) for key, item in value.items() if item is not None}
+    return None
 
 
 def load_project_configs() -> dict[str, dict[str, Any]]:
@@ -1123,16 +1140,27 @@ def run_job(job: dict[str, Any]) -> None:
     if manually_stopped:
         LOG.info("stopped job=%s by user", job_id)
         return
-    current_after_agent = get_job(job_id)
-    if current_after_agent and current_after_agent.get("status") == "blocked":
-        LOG.warning("job=%s blocked by deterministic controller", job_id)
+    blocked_hint = agent_marker(output, BLOCKED_MARKER)
+    if blocked_hint is not None:
+        # The agent reached a deterministic controller limit. It deliberately
+        # did not write a terminal result itself: only this dispatcher converts
+        # the marker into one failed job / one optional continuation.
+        reason = blocked_hint.get("reason") or "Agent controller blocked the job."
+        detail = compact(output, 6000)
+        update_result(job_id, "needs_human", reason, detail, session_id=session_id, pid=process.pid)
+        LOG.warning("job=%s stopped by agent controller: %s", job_id, reason)
         return
+
+    fatal_hint = agent_marker(output, FATAL_MARKER)
+    current_after_agent = get_job(job_id)
     changed_files = current_after_agent.get("changedFiles", []) if current_after_agent else []
     has_file_changes = bool(changed_files)
     if not failure:
         failure = "" if return_code == 0 and COMPLETE_MARKER in output else (
             f"Agent exited {return_code}; completion marker missing." if return_code == 0 else f"Agent exited {return_code}."
         )
+    if fatal_hint and fatal_hint.get("reason"):
+        failure = fatal_hint["reason"]
     if not failure:
         current = get_job(job_id)
         if current and current.get("stage") == "stopped":

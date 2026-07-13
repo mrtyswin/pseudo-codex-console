@@ -65,5 +65,10 @@ with tempfile.TemporaryDirectory() as temporary:
     assert '"--host-native"' in source
     assert "AUTO_DEPLOY_SKIPPED_NO_CHANGES" in source
     assert "AGENT_LAUNCHER_NOT_EXECUTABLE" in source
+    assert module.agent_marker(
+        'ordinary output\n===AGENT_BLOCKED==={"reason":"turn budget","errorClass":"turn_budget"}',
+        module.BLOCKED_MARKER,
+    ) == {"reason": "turn budget", "errorClass": "turn_budget"}
+    assert module.agent_marker("ordinary output", module.FATAL_MARKER) is None
 
 print("DISPATCHER_HOST_NATIVE_EXECUTION_OK")

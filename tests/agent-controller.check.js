@@ -39,7 +39,7 @@ if (state.newChats < 2) {
 } else if (state.calls === 3) {
   process.stdout.write("===FILE: recovered.js===\\nmodule.exports = 'recovered';\\n===ENDFILE===");
 } else if (state.calls === 4) {
-  process.stdout.write("===RUN: node --check recovered.js===");
+  process.stdout.write("===RUN: test -f recovered.js && grep -q 'recovered' recovered.js===");
 } else {
   process.stdout.write("Recovery strategy verified.\\n===TASK_COMPLETE===");
 }

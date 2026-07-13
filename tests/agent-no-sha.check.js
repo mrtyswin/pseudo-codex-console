@@ -32,7 +32,7 @@ if (calls === 1) {
 } else if (calls === 3) {
   process.stdout.write("===FILE: sample.js===\\nconst finalValue = true;\\n===ENDFILE===");
 } else if (calls === 4) {
-  process.stdout.write("===RUN: node --check sample.js===");
+  process.stdout.write("===RUN: test -f sample.js && grep -q 'finalValue = true' sample.js===");
 } else {
   process.stdout.write("No-SHA editing verified.\\n===TASK_COMPLETE===");
 }

@@ -42,6 +42,10 @@ const MAX_STRATEGY_RESETS = Number.parseInt(process.env.PSEUDO_CODEX_MAX_STRATEG
 const MAX_INSPECT_TURNS = Number.parseInt(process.env.PSEUDO_CODEX_MAX_INSPECT_TURNS || '8', 10);
 const MAX_CONTEXT_CHARS = Number.parseInt(process.env.PSEUDO_CODEX_MAX_CONTEXT_CHARS || '200000', 10);
 const COMPLETE_MARKER = '===TASK_COMPLETE===';
+// The dispatcher is the only component allowed to transition a job to a
+// terminal state. These markers carry an agent-side decision without racing it.
+const BLOCKED_MARKER = '===AGENT_BLOCKED===';
+const FATAL_MARKER = '===AGENT_FATAL===';
 const GITHUB_COMPLETE_START = '===GITHUB_COMPLETE===';
 const GITHUB_COMPLETE_END = '===END_GITHUB_COMPLETE===';
 const GITHUB_DIRECT_MAX_TURNS = Number.parseInt(process.env.PSEUDO_CODEX_GITHUB_DIRECT_MAX_TURNS || '10', 10);
@@ -677,33 +681,31 @@ async function execCommands(commands, cwd, auto, onCommand, commandFailures) {
         continue;
       }
       const composeAction = /^chatgpt-compose\s+(pull|build|up)\b/.test(cmd);
-      const scriptDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'pseudo-codex-run-'));
-      const scriptPath = path.join(scriptDirectory, 'command.sh');
-      try {
-        fs.writeFileSync(scriptPath, cmd + '\n', { encoding: 'utf8', mode: 0o700 });
-        const syntax = spawnSync('/bin/bash', ['-n', scriptPath], {
-          encoding: 'utf8', cwd, timeout: 30_000,
-        });
-        if (syntax.status !== 0) {
-          const output = compactOutput((syntax.stdout || '') + (syntax.stderr || '')).trim() || 'Shell syntax check failed.';
-          console.log(output);
-          results.push({ cmd, output, status: syntax.status });
-          commandFailures.add(commandKey);
-          continue;
-        }
-        const result = spawnSync('/bin/bash', ['--noprofile', '--norc', scriptPath], {
-          encoding: 'utf8',
-          cwd,
-          timeout: composeAction ? 900_000 : 60_000,
-          maxBuffer: 10 * 1024 * 1024,
-        });
-        const output = compactOutput((result.stdout || '') + (result.stderr || '')).trim() || '(no output)';
+      // Feed Bash through stdin instead of passing a host-specific temporary
+      // file path. The production worker is Ubuntu, while this also keeps the
+      // controller's regression tests valid on Windows.
+      const bash = process.platform === 'win32' ? 'bash' : '/bin/bash';
+      const syntax = spawnSync(bash, ['-n'], {
+        input: cmd + '\n', encoding: 'utf8', cwd, timeout: 30_000,
+      });
+      if (syntax.status !== 0) {
+        const output = compactOutput((syntax.stdout || '') + (syntax.stderr || '')).trim() || 'Shell syntax check failed.';
         console.log(output);
-        results.push({ cmd, output, status: result.status, timedOut: result.error?.code === 'ETIMEDOUT' });
-        if (result.status !== 0 || result.error) commandFailures.add(commandKey);
-      } finally {
-        fs.rmSync(scriptDirectory, { recursive: true, force: true });
+        results.push({ cmd, output, status: syntax.status });
+        commandFailures.add(commandKey);
+        continue;
       }
+      const result = spawnSync(bash, ['--noprofile', '--norc'], {
+        input: cmd + '\n',
+        encoding: 'utf8',
+        cwd,
+        timeout: composeAction ? 900_000 : 60_000,
+        maxBuffer: 10 * 1024 * 1024,
+      });
+      const output = compactOutput((result.stdout || '') + (result.stderr || '')).trim() || '(no output)';
+      console.log(output);
+      results.push({ cmd, output, status: result.status, timedOut: result.error?.code === 'ETIMEDOUT' });
+      if (result.status !== 0 || result.error) commandFailures.add(commandKey);
     } else {
       console.log('  ✗ Skipped');
       results.push({ cmd, output: '(skipped by user)' });
@@ -1062,17 +1064,17 @@ async function main() {
   const blockJob = async (reason, errorClass) => {
     phase = 'BLOCKED';
     const checkpoint = saveCheckpoint(reason);
-    await reportProgress(args, 'blocked', reason, statePayload({ errorClass, checkpoint }));
-    await reportResult(args, {
-      status: 'blocked',
-      lastError: reason,
-      workerLog: args.sessionFile
-        ? `Checkpoint: ${path.join(path.dirname(args.sessionFile), 'checkpoint.json')}\nLog: /home/ubuntu/.local/state/pseudo-codex/jobs/${args.jobId}.log`
-        : checkpoint,
-      finalAnswer: '',
-      executionResult: compactOutput(executionLog.join('\n\n')),
-      verificationResult: compactOutput(verificationLog.join('\n\n')),
-    });
+    // Do not send a terminal result here. If the agent set blocked/failed and
+    // the dispatcher retried afterwards, both the retry and continuation could
+    // run at once. The dispatcher consumes this marker and makes one decision.
+    await reportProgress(args, 'verifying', reason, statePayload({ errorClass, checkpoint }));
+    console.error(BLOCKED_MARKER + JSON.stringify({
+      reason,
+      errorClass,
+      checkpoint: args.sessionFile
+        ? path.join(path.dirname(args.sessionFile), 'checkpoint.json')
+        : 'inline-checkpoint',
+    }));
     console.error(`[blocked] ${reason}`);
     process.exitCode = 78;
   };
@@ -1385,14 +1387,6 @@ async function main() {
       }
       phase = 'VERIFY';
       await reportProgress(args, 'verifying', '機械的完了条件を確認', statePayload({}));
-      await reportResult(args, {
-        status: 'done',
-        lastError: '',
-        workerLog: '',
-        finalAnswer: finalAnswer || 'Task completed and verified.',
-        executionResult: compactOutput(executionLog.join('\n\n')) || 'No Ubuntu command output was produced.',
-        verificationResult: compactOutput(verificationLog.join('\n\n')) || 'Read-only task completed without file edits.',
-      });
       console.log(`\n${COMPLETE_MARKER}`);
       return;
     }
@@ -1410,15 +1404,9 @@ async function main() {
 }
 
 async function handleFatalError(err) {
-  const args = parseArgs(process.argv.slice(2));
-  await reportResult(args, {
-    status: 'failed',
-    lastError: err instanceof Error ? err.message : String(err),
-    workerLog: '',
-    finalAnswer: '',
-    executionResult: '',
-    verificationResult: '',
-  });
+  const reason = err instanceof Error ? err.message : String(err);
+  // See BLOCKED_MARKER: terminal state ownership belongs to the dispatcher.
+  console.error(FATAL_MARKER + JSON.stringify({ reason }));
   console.error(err);
   process.exit(1);
 }
