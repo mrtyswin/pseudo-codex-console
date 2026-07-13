@@ -205,19 +205,9 @@ function launchBrowser() {
   });
 }
 
-// Use Chrome's native text insertion so ProseMirror receives real input
-// events. The legacy DOM insertion API can report success while leaving the
-// current ChatGPT composer empty.
-async function fillTextarea(page, text) {
-  await page.waitForSelector('#prompt-textarea', { timeout: 10_000 });
-  await page.click('#prompt-textarea');
-  await page.keyboard.down('Control');
-  await page.keyboard.press('A');
-  await page.keyboard.up('Control');
-  await page.keyboard.press('Backspace');
-  await page.keyboard.type(text, { delay: 0 });
+async function waitForComposerText(page, text, timeout) {
   const minimumLength = Math.max(1, Math.floor(String(text).trim().length * 0.8));
-  await page.waitForFunction(
+  return page.waitForFunction(
     expected => {
       const composer = document.querySelector('#prompt-textarea');
       if (!composer) return false;
@@ -225,9 +215,46 @@ async function fillTextarea(page, text) {
       const contentLength = (composer.textContent || '').trim().length;
       return Math.max(visibleLength, contentLength) >= expected;
     },
-    { timeout: 10_000, polling: 250 },
+    { timeout, polling: 250 },
     minimumLength
-  ).catch(() => {
+  );
+}
+
+async function clearComposer(page) {
+  await page.evaluate(() => {
+    const composer = document.querySelector('#prompt-textarea');
+    if (!composer) return;
+    composer.focus();
+    const selection = window.getSelection();
+    const range = document.createRange();
+    range.selectNodeContents(composer);
+    selection.removeAllRanges();
+    selection.addRange(range);
+  });
+}
+
+// Insert through Chrome DevTools Protocol so ProseMirror receives one native
+// Input.insertText event. Per-character keyboard typing can lose input when
+// ChatGPT rerenders the composer between turns.
+async function fillTextarea(page, text) {
+  await page.waitForSelector('#prompt-textarea', { timeout: 10_000 });
+  await clearComposer(page);
+
+  let cdpSession;
+  try {
+    cdpSession = await page.createCDPSession();
+    await cdpSession.send('Input.insertText', { text: String(text) });
+    await waitForComposerText(page, text, 5_000);
+    return;
+  } catch (_cdpError) {
+    await clearComposer(page);
+    await page.keyboard.press('Backspace');
+  } finally {
+    if (cdpSession) await cdpSession.detach().catch(() => {});
+  }
+
+  await page.keyboard.type(text, { delay: 0 });
+  await waitForComposerText(page, text, 10_000).catch(() => {
     throw new Error('CHATGPT_PROMPT_INPUT_FAILED composer remained empty or incomplete');
   });
 }
