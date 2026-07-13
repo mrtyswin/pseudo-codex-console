@@ -28,6 +28,15 @@ for marker in (
         raise RuntimeError(f"expected two JavaScript literal blocks, found {count}: {marker!r}")
     text = text.replace(marker, marker.replace("    '''", "    r'''"))
 
+for marker in (
+    '    "        prompt = notice + \'\\nContinue only in /mnt/workspace. Implement or verify the requested change, then emit TASK_COMPLETE.\';",',
+    '    "        prompt = notice + \'\\nContinue in the configured Ubuntu host working directory, then provide a conclusion and emit TASK_COMPLETE.\';",',
+):
+    count = text.count(marker)
+    if count != 1:
+        raise RuntimeError(f"expected one prompt literal, found {count}: {marker!r}")
+    text = text.replace(marker, marker.replace('    "', '    r"'), 1)
+
 obsolete = '''replace_once(
     "dispatcher/dispatcher.py",
     '                "Do not inspect or execute host-only deployment paths; the host dispatcher deploys after TASK_COMPLETE.",',
