@@ -23,8 +23,36 @@ jobs:
       - run: python3 tests/dispatcher-config-reload.check.py
       - run: python3 tests/dispatcher-host-native.check.py
       - run: python3 tests/dispatcher-parallel.check.py
-      - run: |
-          if git grep -nE 'sandboxWorkspace|/mnt/workspace|sandboxed ChatGPT|inside a sandbox|from the sandbox|サンドボックス' -- ':!tests/**' ':!docs/archive/**'; then
-            echo 'Sandbox runtime references remain.' >&2
-            exit 1
-          fi
+      - name: Verify project sandbox runtime is absent
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          forbidden = (
+              "sandbox" + "Workspace",
+              "/mnt/" + "workspace",
+              "sandboxed " + "ChatGPT",
+              "inside a " + "sandbox",
+              "from the " + "sandbox",
+              "サンド" + "ボックス",
+          )
+          skipped = {
+              Path(".github/workflows/apply-host-native.yml"),
+          }
+          matches = []
+          for path in Path(".").rglob("*"):
+              if not path.is_file() or ".git" in path.parts or "node_modules" in path.parts:
+                  continue
+              if path.parts[:1] == ("tests",) or path.parts[:2] == ("docs", "archive") or path in skipped:
+                  continue
+              try:
+                  text = path.read_text(encoding="utf-8")
+              except (UnicodeDecodeError, OSError):
+                  continue
+              for value in forbidden:
+                  if value in text:
+                      matches.append(f"{path}: {value}")
+          if matches:
+              raise SystemExit("Project sandbox runtime references remain:\n" + "\n".join(matches))
+          print("HOST_NATIVE_NO_PROJECT_SANDBOX_REFERENCES_OK")
+          PY
