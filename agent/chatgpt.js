@@ -289,6 +289,15 @@ async function waitForStreamingDone(page, log, beforeState, timeoutMs = RESPONSE
 
 async function submitPrompt(page, fullPrompt, log) {
   await fillTextarea(page, fullPrompt);
+  await page.waitForFunction(
+    () => {
+      const button = document.querySelector('button[data-testid="send-button"]');
+      return !!button && !button.disabled;
+    },
+    { timeout: 15_000, polling: 250 }
+  ).catch(() => {
+    throw new Error('CHATGPT_SEND_BUTTON_UNAVAILABLE after prompt input');
+  });
   const beforeState = await snapshotAssistantState(page);
   const clicked = await page.evaluate(() => {
     const button = document.querySelector('button[data-testid="send-button"]');
@@ -299,9 +308,7 @@ async function submitPrompt(page, fullPrompt, log) {
   if (clicked) {
     log('Submitted via send button');
   } else {
-    await page.focus('#prompt-textarea');
-    await page.keyboard.press('Enter');
-    log('Send button unavailable; submitted via Enter key');
+    throw new Error('CHATGPT_SEND_BUTTON_UNAVAILABLE before click');
   }
   return beforeState;
 }
