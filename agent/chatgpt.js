@@ -215,7 +215,7 @@ async function fillTextarea(page, text) {
   await page.keyboard.press('A');
   await page.keyboard.up('Control');
   await page.keyboard.press('Backspace');
-  await page.keyboard.insertText(text);
+  await page.keyboard.sendCharacter(text);
   const minimumLength = Math.max(1, Math.floor(String(text).trim().length * 0.8));
   await page.waitForFunction(
     expected => {
