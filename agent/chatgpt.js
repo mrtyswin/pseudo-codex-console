@@ -290,9 +290,19 @@ async function waitForStreamingDone(page, log, beforeState, timeoutMs = RESPONSE
 async function submitPrompt(page, fullPrompt, log) {
   await fillTextarea(page, fullPrompt);
   const beforeState = await snapshotAssistantState(page);
-  await page.focus('#prompt-textarea');
-  await page.keyboard.press('Enter');
-  log('Submitted via Enter key');
+  const clicked = await page.evaluate(() => {
+    const button = document.querySelector('button[data-testid="send-button"]');
+    if (!button || button.disabled) return false;
+    button.click();
+    return true;
+  });
+  if (clicked) {
+    log('Submitted via send button');
+  } else {
+    await page.focus('#prompt-textarea');
+    await page.keyboard.press('Enter');
+    log('Send button unavailable; submitted via Enter key');
+  }
   return beforeState;
 }
 
