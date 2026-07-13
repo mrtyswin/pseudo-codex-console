@@ -75,6 +75,7 @@ function parseArgs(argv) {
     hostWorkspace: null,
     hostProductionRoot: null,
     hostDeployCommand: null,
+    hostNative: false,
     taskFile: null,
     taskStdin: false,
     executionMode: process.env.PSEUDO_CODEX_EXECUTION_MODE || 'local',
@@ -96,6 +97,7 @@ function parseArgs(argv) {
     else if (argv[i] === '--host-workspace') args.hostWorkspace = argv[++i];
     else if (argv[i] === '--host-production-root') args.hostProductionRoot = argv[++i];
     else if (argv[i] === '--host-deploy-command') args.hostDeployCommand = argv[++i];
+    else if (argv[i] === '--host-native') args.hostNative = true;
     else if (argv[i] === '--task-file') args.taskFile = argv[++i];
     else if (argv[i] === '--task-stdin') args.taskStdin = true;
     else if (argv[i] === '--execution-mode') args.executionMode = argv[++i];
@@ -245,7 +247,7 @@ function cleanFinalAnswer(response) {
     .replace(/^--- RESPONSE ---\s*/i, '')
     .replace(/\s*--- END ---$/i, '')
     .trim();
-  return answer || 'Task completed and verified.';
+  return answer;
 }
 
 function isVerificationCommand(command) {
@@ -322,6 +324,7 @@ function errorFingerprint(result) {
 }
 
 function isHostOnlyCommand(command, args) {
+  if (args.hostNative) return false;
   const value = String(command || '');
   const hostPaths = [args.hostWorkspace, args.hostProductionRoot]
     .filter(item => typeof item === 'string' && item.startsWith('/'));
@@ -337,7 +340,7 @@ function compactContext(value) {
 
 // ─── Build initial prompt ─────────────────────────────────────────────────────
 
-function buildInitialPrompt(task, files, cwd) {
+function buildInitialPrompt(task, files, cwd, hostNative = false) {
   let prompt = '';
 
   if (files.length > 0) {
@@ -351,7 +354,8 @@ function buildInitialPrompt(task, files, cwd) {
 
   prompt +=
     `Task: ${task}\n` +
-    `Working directory: ${cwd}\n\n` +
+    `Working directory: ${cwd}\n` +
+    `Execution environment: ${hostNative ? 'Ubuntu host directly (no project sandbox).' : 'configured local environment.'}\n\n` +
     `You are a coding agent with access to the user's filesystem.\n` +
     `Use these plain-text formats — no markdown, no code fences:\n\n` +
     `To run one shell command:\n` +
@@ -378,6 +382,7 @@ function buildInitialPrompt(task, files, cwd) {
     `- Never repeat a failed command. Change tool or narrow the target instead.\n` +
     `- You can mix RUN, EDIT, REPLACE, PATCH, and FILE blocks in one response.\n` +
     `- After file blocks, briefly explain what you changed and why.\n` +
+    `- Before ${COMPLETE_MARKER}, include a concise user-facing conclusion that answers the task.\n` +
     `- When the task is fully verified, output ${COMPLETE_MARKER} on its own line.`;
 
   return prompt;
@@ -977,7 +982,7 @@ async function main() {
   if (args.check)        console.log(`Check: ${args.check}`);
   console.log('');
 
-  let prompt = buildInitialPrompt(args.task, args.files, args.cwd);
+  let prompt = buildInitialPrompt(args.task, args.files, args.cwd, args.hostNative);
   if (args.executionMode === 'verify_only') {
     prompt = [
       'VERIFICATION-ONLY MODE.',
@@ -1142,7 +1147,7 @@ async function main() {
       `Failure evidence:\n${compactOutput(evidence || '(none)')}`,
       'Choose a materially different method. Do not repeat any failed command.',
       'If PATCH/EDIT failed, use a complete FILE block after reading the current target.',
-      'Do not inspect or execute host-only deployment paths; the host dispatcher deploys after TASK_COMPLETE.',
+      'Continue on the Ubuntu host using the configured job workspace; the dispatcher still owns publication and deployment after TASK_COMPLETE.',
       'Return one smallest useful action now.',
     ].join('\n\n');
     await reportProgress(
@@ -1278,7 +1283,7 @@ async function main() {
     const hostOnlyCommands = runCmds.filter(command => isHostOnlyCommand(command, args));
     if (hostOnlyCommands.length > 0) {
       const notice = [
-        'HOST_ONLY_COMMAND_DEFERRED: the sandbox cannot inspect or run host deployment paths.',
+        'HOST_ONLY_COMMAND_DEFERRED: this command is reserved for dispatcher-owned deployment.',
         'The host dispatcher will deploy automatically after workspace verification and TASK_COMPLETE.',
         ...hostOnlyCommands.map(command => `$ ${command}`),
       ].join('\n');
@@ -1287,7 +1292,7 @@ async function main() {
       runCmds = runCmds.filter(command => !isHostOnlyCommand(command, args));
       if (runCmds.length === 0) {
         phase = hasEdited ? 'TEST' : 'PLAN';
-        prompt = notice + '\nContinue only in /mnt/workspace. Implement or verify the requested change, then emit TASK_COMPLETE.';
+        prompt = notice + '\nContinue in the configured Ubuntu host working directory, then provide a conclusion and emit TASK_COMPLETE.';
         continue;
       }
     }
@@ -1360,13 +1365,18 @@ async function main() {
         }
         continue;
       }
+      const finalAnswer = cleanFinalAnswer(response);
+      if (!hasEdited && !finalAnswer) {
+        prompt = 'Completion rejected: provide a concise user-facing conclusion based on the observed Ubuntu host command results, then output TASK_COMPLETE.';
+        continue;
+      }
       phase = 'VERIFY';
       await reportProgress(args, 'verifying', '機械的完了条件を確認', statePayload({}));
       await reportResult(args, {
         status: 'done',
         lastError: '',
         workerLog: '',
-        finalAnswer: cleanFinalAnswer(response),
+        finalAnswer: finalAnswer || 'Task completed and verified.',
         executionResult: compactOutput(executionLog.join('\n\n')) || 'No Ubuntu command output was produced.',
         verificationResult: compactOutput(verificationLog.join('\n\n')) || 'Read-only task completed without file edits.',
       });
@@ -1406,7 +1416,10 @@ if (require.main === module) {
 
 module.exports = {
   buildGithubDirectPrompt,
+  buildInitialPrompt,
+  cleanFinalAnswer,
   commandValidationError,
+  isHostOnlyCommand,
   parseActionTarget,
   parseEditBlocks,
   parseGithubCompletion,

@@ -13,6 +13,8 @@ assert.match(source, /class="settings-content"/);
 assert.match(source, /ChatGPTとのやり取り/);
 assert.match(source, /name="executionMode"/);
 assert.match(source, /name="gitRepository"/);
+assert.match(source, /Ubuntuホスト直接実行/);
+assert.doesNotMatch(source, /sandboxWorkspace|Sandbox Workspace|\/mnt\/workspace/);
 
 const renderStart = source.indexOf("function renderPage(jobs, message)");
 const renderEnd = source.indexOf("function parseJobPath", renderStart);

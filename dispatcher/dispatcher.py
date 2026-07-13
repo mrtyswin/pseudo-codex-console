@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run queued local jobs through the sandboxed ChatGPT browser agent."""
+"""Run queued jobs directly on the Ubuntu host through the ChatGPT browser agent."""
 
 from __future__ import annotations
 
@@ -182,6 +182,13 @@ def project_path(project: str, project_config: dict[str, Any] | None = None) -> 
     if not candidate.is_dir():
         raise ValueError(f"configured workspace does not exist: {candidate}")
     return candidate
+
+
+def ensure_host_native_workspace(workspace: Path) -> None:
+    resolved = workspace.resolve()
+    disabled_root = Path("/mnt") / "workspace"
+    if resolved == disabled_root or disabled_root in resolved.parents:
+        raise RuntimeError("SANDBOX_WORKSPACE_DISABLED: jobs must run on the Ubuntu host workspace")
 
 
 def run_git(workspace: Path, args: list[str], timeout: int = 120) -> subprocess.CompletedProcess[str]:
@@ -563,7 +570,7 @@ def publish_github_direct_changes(
 
 
 def cleanup_git_worktree(context: dict[str, Any] | None) -> None:
-    if context is None:
+    if context is None or "worktree" not in context:
         return
     source = Path(context["source"])
     worktree = Path(context["worktree"])
@@ -600,7 +607,7 @@ def task_for(job: dict[str, Any], project_config: dict[str, Any] | None = None) 
         )
     lines = [
             "You are the sole implementation agent for this queued local task.",
-            "Work only inside the provided project directory using the available sandbox tools.",
+            "Run directly on the Ubuntu host and work only inside the provided host project directory.",
             "Inspect existing files before changing them. Run meaningful verification commands.",
             "Use standard unified PATCH blocks for existing-file edits; a complete FILE block may replace a file when patch context is unstable.",
             "Keep RUN blocks short. Do not embed base64, gzip payloads, or large scripts in RUN blocks.",
@@ -609,12 +616,12 @@ def task_for(job: dict[str, Any], project_config: dict[str, Any] | None = None) 
             "When verified, output ===TASK_COMPLETE=== on its own line.",
             "HOST DEPLOYMENT CONTRACT (authoritative):",
             json.dumps(project_config, ensure_ascii=False, sort_keys=True),
-            "You are running inside a sandbox. Its only writable project path is /mnt/workspace.",
-            "Host paths in the contract (including /home/ubuntu and /opt) are intentionally invisible in the sandbox.",
-            "Never inspect or execute deployCommand, productionRoot, service, or the host workspace from RUN blocks.",
-            "Implement and verify only in /mnt/workspace. Then output ===TASK_COMPLETE===.",
-            "After that marker, the host dispatcher automatically runs deployCommand and production verification.",
-            "If the user asks for production deployment, this role split still applies; do not attempt host deployment yourself.",
+            "Execution is host-native: there is no isolated project workspace mapping.",
+            "The working directory is the real Ubuntu job workspace or Git worktree.",
+            "You may inspect Ubuntu host state with non-destructive commands such as ss, systemctl status, ps, and /proc reads.",
+            "Do not use sudo, expose credentials, or modify unrelated host paths.",
+            "Implement or inspect in the provided host working directory, verify the result, and include a concise user-facing conclusion before ===TASK_COMPLETE===.",
+            "After completion, the host dispatcher alone performs configured publication, deployment, and production verification.",
             "Task title: " + str(job.get("title", "")),
             "Task instruction:",
             str(job.get("instruction", "")),
@@ -625,7 +632,7 @@ def task_for(job: dict[str, Any], project_config: dict[str, Any] | None = None) 
                 "",
                 "GIT AUTHORING CONTRACT:",
                 "This project is configured to treat the Git workspace as the source of truth.",
-                "Make file changes only inside the sandbox workspace that mirrors the repository checkout.",
+                "Make file changes only inside the dedicated Ubuntu host Git worktree for this job.",
                 "Do not attempt manual git push credentials setup inside the task.",
                 "After you verify the change and output ===TASK_COMPLETE===, the host dispatcher will commit and optionally push using host-side credentials if configured.",
             ]
@@ -925,6 +932,7 @@ def run_job(job: dict[str, Any]) -> None:
         project_config = get_project_config(str(job["project"]))
         source_workspace = project_path(str(job["project"]), project_config)
         cwd, git_context = prepare_job_workspace(job, source_workspace, project_config)
+        ensure_host_native_workspace(cwd)
     except Exception as exc:
         update_result(job_id, "needs_human", str(exc), "Dispatcher rejected the project path.")
         return
@@ -948,6 +956,7 @@ def run_job(job: dict[str, Any]) -> None:
         "--cwd",
         str(cwd),
         "--task-stdin",
+        "--host-native",
     ]
     execution_mode = str(project_config.get("executionMode", "local"))
     git_config = project_config.get("git", {})
@@ -960,14 +969,6 @@ def run_job(job: dict[str, Any]) -> None:
                 "--github-branch", str(git_context["branch"] if git_context else ""),
             ]
         )
-    for flag, key in (
-        ("--host-workspace", "workspace"),
-        ("--host-production-root", "productionRoot"),
-        ("--host-deploy-command", "deployCommand"),
-    ):
-        value = project_config.get(key)
-        if isinstance(value, str) and value:
-            command.extend([flag, value])
     path = job_log_path(job_id)
     LOG.info("starting job=%s project=%s attempt=%s session=%s", job_id, cwd.name, attempts, session_id)
     started = time.time()
@@ -1028,6 +1029,8 @@ def run_job(job: dict[str, Any]) -> None:
     if current_after_agent and current_after_agent.get("status") == "blocked":
         LOG.warning("job=%s blocked by deterministic controller", job_id)
         return
+    changed_files = current_after_agent.get("changedFiles", []) if current_after_agent else []
+    has_file_changes = bool(changed_files)
     if not failure:
         failure = "" if return_code == 0 and COMPLETE_MARKER in output else (
             f"Agent exited {return_code}; completion marker missing." if return_code == 0 else f"Agent exited {return_code}."
@@ -1045,6 +1048,11 @@ def run_job(job: dict[str, Any]) -> None:
             deploy_ok = True
             publish_output = "VERIFY_ONLY_NO_PUBLISH"
             deploy_output = "VERIFY_ONLY_NO_DEPLOY"
+        elif not has_file_changes:
+            publish_ok = True
+            deploy_ok = True
+            publish_output = "NO_FILE_CHANGES"
+            deploy_output = "AUTO_DEPLOY_SKIPPED_NO_CHANGES"
         elif git_context is None:
             publish_ok, publish_output = publish_git_changes(job, git_context, project_config)
             if publish_ok:
@@ -1087,7 +1095,12 @@ def run_job(job: dict[str, Any]) -> None:
         with path.open("a", encoding="utf-8", errors="replace") as log_handle:
             log_handle.write("\n\nAuto deploy:\n" + combined_output + "\n")
         if not failure:
-            update_progress(job_id, "verifying", "本番health・実画面・Git差分検証完了", session_id, process.pid, "VERIFY")
+            completion_message = (
+                "Ubuntuホスト上の読み取り処理完了（変更・配備なし）"
+                if not has_file_changes
+                else "本番health・実画面・Git差分検証完了"
+            )
+            update_progress(job_id, "verifying", completion_message, session_id, process.pid, "VERIFY")
             update_result(
                 job_id,
                 "done",

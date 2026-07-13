@@ -1,9 +1,0 @@
-HOST_NATIVE_PREFLIGHT_OK
-/home/runner/work/pseudo-codex-console/pseudo-codex-console/.pseudo-codex/apply-host-native.py:447: SyntaxWarning: invalid escape sequence '\/'
-  '''assert.match(source, /name="gitRepository"/);
-Traceback (most recent call last):
-  File "/home/runner/work/pseudo-codex-console/pseudo-codex-console/.pseudo-codex/apply-host-native.py", line 236, in <module>
-    replace_once(
-  File "/home/runner/work/pseudo-codex-console/pseudo-codex-console/.pseudo-codex/apply-host-native.py", line 12, in replace_once
-    raise RuntimeError(f"{relative}: expected one match, found {count}: {old[:120]!r}")
-RuntimeError: agent/agent.js: expected one match, found 0: "        prompt = notice + '\nContinue only in /mnt/workspace. Implement or verify the requested change, then emit TASK_CO"

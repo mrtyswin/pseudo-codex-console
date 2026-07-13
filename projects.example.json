@@ -1,7 +1,7 @@
 {
   "request-console": {
+    "executionMode": "github_direct",
     "workspace": "/path/to/request-console",
-    "sandboxWorkspace": "/mnt/workspace",
     "productionRoot": "/path/to/production-root",
     "deployCommand": "/path/to/deploy-command",
     "verifyCommand": "/path/to/verify-command",
@@ -11,6 +11,7 @@
     "requiresDeployment": true,
     "git": {
       "enabled": true,
+      "repository": "owner/pseudo-codex-console",
       "remote": "origin",
       "baseBranch": "main",
       "branchPrefix": "request-console",
