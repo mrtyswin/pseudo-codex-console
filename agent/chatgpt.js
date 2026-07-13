@@ -153,8 +153,6 @@ async function uploadFileToChatGPT(page, uploadPath, log) {
   if (!fs.existsSync(abs)) throw new Error(`Upload file not found: ${abs}`);
   log(`Uploading file: ${abs}`);
 
-  await page.bringToFront();
-
   // Wait for the hidden file input to be present in the DOM
   const inputHandle = await page.waitForSelector('#upload-files', { timeout: 8_000 });
 
@@ -208,7 +206,6 @@ function launchBrowser() {
 // execCommand('insertText') is the fastest reliable way to fill a
 // React-controlled contenteditable without breaking its event listeners.
 async function fillTextarea(page, text) {
-  await page.bringToFront();
   await page.waitForSelector('#prompt-textarea', { timeout: 10_000 });
   await page.click('#prompt-textarea');
   await page.evaluate(t => {

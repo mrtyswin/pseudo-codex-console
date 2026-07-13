@@ -51,10 +51,10 @@ BLOCKED_MARKER = "===AGENT_BLOCKED==="
 FATAL_MARKER = "===AGENT_FATAL==="
 BROWSER_SERVICE = os.environ.get("PSEUDO_CODEX_BROWSER_SERVICE", "chatgpt-browser-agent.service")
 WORKER_ID = os.environ.get("PSEUDO_CODEX_WORKER_ID", f"{socket.gethostname()}-{os.getpid()}")
-# One logged-in ChatGPT browser is a single external interaction channel.
-# Parallel agent processes race its tabs and can attach responses to the wrong
-# job. Queue jobs by default; explicit multi-browser workers can opt in later.
-MAX_WORKERS = max(1, int(os.environ.get("PSEUDO_CODEX_MAX_WORKERS", "1")))
+# Each job has its own browser page, session key, and conversation file. Two
+# workers keep the shared browser responsive while allowing independent
+# projects (and Git-isolated worktrees) to make progress concurrently.
+MAX_WORKERS = max(1, int(os.environ.get("PSEUDO_CODEX_MAX_WORKERS", "2")))
 GITHUB_FIRST_PROJECTS = {"request-console"}
 CODEX_CLI_ONLY_PROJECTS = {"request-console"}
 
@@ -742,6 +742,15 @@ def restart_browser() -> str:
         return f"$ {' '.join(command)}\nrestart error: {exc!r}"
 
 
+def recover_browser_after_failure() -> str:
+    if MAX_WORKERS > 1:
+        return (
+            "BROWSER_RESTART_SKIPPED_SHARED_DAEMON "
+            "session-local recovery exhausted; preserving other active sessions"
+        )
+    return restart_browser()
+
+
 def log_reference(job_id: str, detail: str = "") -> str:
     prefix = compact(detail, 8000).strip()
     pointer = "Log: " + str(job_log_path(job_id))
@@ -1255,7 +1264,7 @@ def run_job(job: dict[str, Any]) -> None:
         LOG.error("job=%s deployment needs human review: %s", job_id, failure)
         return
 
-    restart_log = restart_browser()
+    restart_log = recover_browser_after_failure()
     detail = compact(output, 6000) + "\n\nBrowser restart:\n" + restart_log
     if attempts >= MAX_ATTEMPTS:
         update_result(job_id, "needs_human", failure, detail, session_id=session_id, pid=process.pid)
