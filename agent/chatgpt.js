@@ -66,13 +66,15 @@ function readSessionUrl(sessionFile) {
     : CHATGPT_URL;
 }
 
-function projectHomeUrl() {
+function newChatUrl() {
   const sessionUrl = readSessionUrl(SESSION_FILE);
   try {
     const parsed = new URL(sessionUrl);
     const marker = parsed.pathname.indexOf('/c/');
     return marker >= 0
-      ? parsed.origin + parsed.pathname.slice(0, marker) + '/project'
+      // A GPT project's /project page lists chats but cannot accept a new
+      // prompt. Keep the GPT path and remove only the old conversation ID.
+      ? parsed.origin + parsed.pathname.slice(0, marker)
       : CHATGPT_URL;
   } catch {
     return CHATGPT_URL;
@@ -528,7 +530,7 @@ async function startDaemonProcess() {
               log(`Starting new chat for sessionKey=${key}`);
               await navigateWithRetry(
                 page,
-                activeSessionFile === SESSION_FILE ? CHATGPT_URL : projectHomeUrl(),
+                activeSessionFile === SESSION_FILE ? CHATGPT_URL : newChatUrl(),
                 log
               );
             } else if (currentUrl !== sessionUrl) {
