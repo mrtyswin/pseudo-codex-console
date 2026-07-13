@@ -67,18 +67,10 @@ function readSessionUrl(sessionFile) {
 }
 
 function newChatUrl() {
-  const sessionUrl = readSessionUrl(SESSION_FILE);
-  try {
-    const parsed = new URL(sessionUrl);
-    const marker = parsed.pathname.indexOf('/c/');
-    return marker >= 0
-      // A GPT project's /project page lists chats but cannot accept a new
-      // prompt. Keep the GPT path and remove only the old conversation ID.
-      ? parsed.origin + parsed.pathname.slice(0, marker)
-      : CHATGPT_URL;
-  } catch {
-    return CHATGPT_URL;
-  }
+  // ChatGPT redirects GPT project paths to their non-chat /project view.
+  // That page can render a textarea but does not create a conversation, so
+  // every isolated job must begin at the normal conversation endpoint.
+  return CHATGPT_URL;
 }
 
 // ─── System prompt ────────────────────────────────────────────────────────────
