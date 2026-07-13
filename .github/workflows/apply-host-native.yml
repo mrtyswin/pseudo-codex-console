@@ -45,25 +45,41 @@ jobs:
           rm -f .pseudo-codex/host-native.error .pseudo-codex/apply-host-native.py .pseudo-codex/preflight-host-native.py .github/workflows/apply-host-native.yml
           echo "applied=true" >> "$GITHUB_OUTPUT"
       - name: Verify syntax and regressions
+        id: verify
         if: steps.apply.outputs.applied == 'true'
         run: |
-          npm run check:syntax
-          npm run check
-          python3 -m py_compile dispatcher/dispatcher.py scripts/chatgpt-compose.py scripts/chatgpt-compose-bridge.py
-          python3 tests/dispatcher-git.check.py
-          python3 tests/dispatcher-github-direct.check.py
-          python3 tests/dispatcher-config-reload.check.py
-          python3 tests/dispatcher-host-native.check.py
-          python3 tests/dispatcher-parallel.check.py
-          if git grep -nE 'sandboxWorkspace|/mnt/workspace|sandboxed ChatGPT|inside a sandbox|from the sandbox|サンドボックス' -- ':!tests/**' ':!docs/archive/**'; then
-            echo 'Sandbox runtime references remain.' >&2
-            exit 1
-          fi
-      - name: Commit host-native implementation
+          set +e
+          : > .pseudo-codex/host-native.verify.log
+          for command in \
+            "npm run check:syntax" \
+            "npm run check" \
+            "python3 -m py_compile dispatcher/dispatcher.py scripts/chatgpt-compose.py scripts/chatgpt-compose-bridge.py" \
+            "python3 tests/dispatcher-git.check.py" \
+            "python3 tests/dispatcher-github-direct.check.py" \
+            "python3 tests/dispatcher-config-reload.check.py" \
+            "python3 tests/dispatcher-host-native.check.py" \
+            "python3 tests/dispatcher-parallel.check.py" \
+            "! git grep -nE 'sandboxWorkspace|/mnt/workspace|sandboxed ChatGPT|inside a sandbox|from the sandbox|サンドボックス' -- ':!tests/**' ':!docs/archive/**'"
+          do
+            printf '\n$ %s\n' "$command" >> .pseudo-codex/host-native.verify.log
+            sh -lc "$command" >> .pseudo-codex/host-native.verify.log 2>&1
+            status=$?
+            if [ "$status" -ne 0 ]; then
+              echo "VERIFY_STATUS=$status" >> .pseudo-codex/host-native.verify.log
+              echo "status=$status" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          done
+          echo "status=0" >> "$GITHUB_OUTPUT"
+      - name: Commit generated implementation and diagnostics
         if: steps.apply.outputs.applied == 'true'
         run: |
           git config user.name "Pseudo Codex GitHub Direct"
           git config user.email "pseudo-codex@example.invalid"
           git add -A
+          git add -f .pseudo-codex/host-native.verify.log
           git commit -m "Run console jobs directly on the Ubuntu host"
           git push origin HEAD:feature/host-native-execution
+      - name: Fail when verification failed
+        if: steps.apply.outputs.applied == 'true' && steps.verify.outputs.status != '0'
+        run: exit 1
