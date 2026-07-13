@@ -37,16 +37,28 @@ for marker in (
         raise RuntimeError(f"expected one prompt literal, found {count}: {marker!r}")
     text = text.replace(marker, marker.replace('    "', '    r"'), 1)
 
-obsolete = '''replace_once(
+obsolete_blocks = [
+'''replace_once(
     "dispatcher/dispatcher.py",
     '                "Do not inspect or execute host-only deployment paths; the host dispatcher deploys after TASK_COMPLETE.",',
     '                "Use the real Ubuntu host workspace for inspection and verification; the dispatcher still owns publication and deployment after TASK_COMPLETE.",',
 )
-'''
-count = text.count(obsolete)
-if count != 1:
-    raise RuntimeError(f"expected one obsolete dispatcher replacement, found {count}")
-text = text.replace(obsolete, "", 1)
+''',
+'''replace_once(
+    ".github/workflows/test.yml",
+    ''' + "'''" + '''      - run: python3 tests/dispatcher-config-reload.check.py
+      - run: python3 tests/dispatcher-parallel.check.py''' + "'''" + ''',
+    ''' + "'''" + '''      - run: python3 tests/dispatcher-config-reload.check.py
+      - run: python3 tests/dispatcher-host-native.check.py
+      - run: python3 tests/dispatcher-parallel.check.py''' + "'''" + ''',
+)
+''',
+]
+for obsolete in obsolete_blocks:
+    count = text.count(obsolete)
+    if count != 1:
+        raise RuntimeError(f"expected one obsolete replacement, found {count}: {obsolete[:100]!r}")
+    text = text.replace(obsolete, "", 1)
 
 path.write_text(text, encoding="utf-8")
 print("HOST_NATIVE_PREFLIGHT_OK")
