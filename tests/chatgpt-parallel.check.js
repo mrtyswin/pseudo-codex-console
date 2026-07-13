@@ -17,6 +17,11 @@ const env = Object.assign({}, process.env, {
 });
 
 assert.doesNotMatch(source, /bringToFront\(/, "parallel pages must not steal browser focus");
+assert.match(source, /--disable-background-timer-throttling/);
+assert.match(source, /--disable-backgrounding-occluded-windows/);
+assert.match(source, /--disable-renderer-backgrounding/);
+assert.match(source, /let navigationTail = Promise\.resolve\(\)/);
+assert.match(source, /await navigateSessionPage\(page, initialUrl\)/);
 
 function run(args) {
   return new Promise((resolve, reject) => {

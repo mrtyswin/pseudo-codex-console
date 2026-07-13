@@ -197,6 +197,9 @@ function launchBrowser() {
       '--no-default-browser-check',
       '--disable-blink-features=AutomationControlled',
       '--disable-extensions-except=',
+      '--disable-background-timer-throttling',
+      '--disable-backgrounding-occluded-windows',
+      '--disable-renderer-backgrounding',
     ],
     defaultViewport: null,
   });
@@ -463,12 +466,24 @@ async function startDaemonProcess() {
     process.exit(1);
   }
 
+  // Chrome can leave one CDP navigation hung when two pages navigate at the
+  // same instant. Serialize only page navigation; prompt submission and
+  // response streaming remain concurrent after both pages are ready.
+  let navigationTail = Promise.resolve();
+  const navigateSessionPage = (page, targetUrl) => {
+    const current = navigationTail
+      .catch(() => {})
+      .then(() => navigateWithRetry(page, targetUrl, log));
+    navigationTail = current.catch(() => {});
+    return current;
+  };
+
   const getSession = async (key, activeSessionFile) => {
     if (!sessions.has(key)) {
       sessions.set(key, (async () => {
         const page = await browser.newPage();
         const initialUrl = readSessionUrl(activeSessionFile);
-        await navigateWithRetry(page, initialUrl, log);
+        await navigateSessionPage(page, initialUrl);
         return { page, tail: Promise.resolve(), conversationUrl: initialUrl };
       })());
     }
@@ -527,14 +542,13 @@ async function startDaemonProcess() {
             const currentUrl = page.url();
             if (newChat) {
               log(`Starting new chat for sessionKey=${key}`);
-              await navigateWithRetry(
+              await navigateSessionPage(
                 page,
-                activeSessionFile === SESSION_FILE ? CHATGPT_URL : newChatUrl(),
-                log
+                activeSessionFile === SESSION_FILE ? CHATGPT_URL : newChatUrl()
               );
             } else if (currentUrl !== sessionUrl) {
               log(`Switching session ${key} to ${sessionUrl}`);
-              await navigateWithRetry(page, sessionUrl, log);
+              await navigateSessionPage(page, sessionUrl);
             }
 
             let raw;
