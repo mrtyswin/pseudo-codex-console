@@ -16,8 +16,10 @@ assert.equal(agent.isHostOnlyCommand("systemctl status ssh", {
   hostDeployCommand: "/usr/local/libexec/pseudo-codex-deploy-request-console",
 }), false);
 assert.equal(agent.cleanFinalAnswer("===TASK_COMPLETE==="), "");
-assert.equal(agent.cleanFinalAnswer("SSHは起動しています。
-===TASK_COMPLETE==="), "SSHは起動しています。");
+assert.equal(
+  agent.cleanFinalAnswer("SSHは起動しています。\n===TASK_COMPLETE==="),
+  "SSHは起動しています。"
+);
 
 const source = fs.readFileSync(path.join(__dirname, "..", "agent", "agent.js"), "utf8");
 assert.doesNotMatch(source, /HOST_ONLY_COMMAND_DEFERRED: the sandbox/);
