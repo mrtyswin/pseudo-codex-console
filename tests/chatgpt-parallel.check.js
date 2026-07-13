@@ -72,6 +72,14 @@ function run(args) {
   assert.ok(!a2.includes(bConversation));
   assert.ok(!b2.includes(aConversation));
 
+  await assert.rejects(
+    () => run(["--session-key", "recover", "--new", "FAKE_BROWSER_FAILURE"]),
+    /simulated session-local browser failure/,
+  );
+  const recovered = await run(["--session-key", "recover", "--new", "recovered"]);
+  assert.match(recovered, /^conversation-/);
+  assert.match(recovered, /Task: recovered/);
+
   const legacy1 = await run(["--new", "legacy1"]);
   const legacyConversation = legacy1.split(":", 1)[0];
   const legacy2 = await run(["legacy2"]);

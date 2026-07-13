@@ -530,6 +530,7 @@ async function startDaemonProcess() {
       let body = '';
       req.on('data', chunk => (body += chunk));
       req.on('end', async () => {
+        let requestSessionKey = '';
         try {
           const payload = JSON.parse(body || '{}');
           const {
@@ -544,6 +545,7 @@ async function startDaemonProcess() {
           const key = String(
             sessionKey || (activeSessionFile === SESSION_FILE ? 'default' : activeSessionFile)
           ).slice(0, 500);
+          requestSessionKey = key;
           const state = await getSession(key, activeSessionFile);
           const result = await enqueue(state, async () => {
             const page = state.page;
@@ -627,6 +629,17 @@ async function startDaemonProcess() {
           send(200, result);
         } catch (err) {
           log(`Error: ${err.message}`);
+          if (requestSessionKey) {
+            const failedSession = sessions.get(requestSessionKey);
+            sessions.delete(requestSessionKey);
+            try {
+              const failedState = await failedSession;
+              if (failedState?.page) await failedState.page.close();
+              log(`Reset failed browser session: sessionKey=${requestSessionKey}`);
+            } catch (resetError) {
+              log(`Failed to reset browser session ${requestSessionKey}: ${resetError.message}`);
+            }
+          }
           send(500, { ok: false, error: err.message });
         }
       });

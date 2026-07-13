@@ -17,6 +17,10 @@ class FakePage {
     this.reloadCount += 1;
   }
 
+  async close() {
+    this.currentUrl = "closed:" + this.pageId;
+  }
+
   url() {
     return this.currentUrl;
   }
@@ -41,6 +45,9 @@ async function launchBrowser() {
 }
 
 async function send({ page, fullPrompt, newChat }) {
+  if (fullPrompt.includes("FAKE_BROWSER_FAILURE")) {
+    throw new Error("simulated session-local browser failure");
+  }
   let conversationId = String(page.url()).match(/\/c\/([^/?#]+)/)?.[1] || "";
   if (newChat || !conversationId) {
     conversationId = "conversation-" + page.pageId + "-" + Date.now().toString(36);
