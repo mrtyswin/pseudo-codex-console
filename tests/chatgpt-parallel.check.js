@@ -16,12 +16,18 @@ const env = Object.assign({}, process.env, {
   PSEUDO_CODEX_BROWSER_CLIENT: adapter,
 });
 
-assert.doesNotMatch(source, /bringToFront\(/, "parallel pages must not steal browser focus");
+assert.equal(
+  (source.match(/bringToFront\(/g) || []).length,
+  1,
+  "focus changes must be centralized in the browser interaction queue",
+);
 assert.match(source, /--disable-background-timer-throttling/);
 assert.match(source, /--disable-backgrounding-occluded-windows/);
 assert.match(source, /--disable-renderer-backgrounding/);
-assert.match(source, /let navigationTail = Promise\.resolve\(\)/);
+assert.match(source, /let browserInteractionTail = Promise\.resolve\(\)/);
+assert.match(source, /const withBrowserInteraction = \(page, task\)/);
 assert.match(source, /await navigateSessionPage\(page, initialUrl\)/);
+assert.match(source, /task => withBrowserInteraction\(page, task\)/);
 
 function run(args) {
   return new Promise((resolve, reject) => {
