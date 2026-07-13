@@ -51,7 +51,10 @@ BLOCKED_MARKER = "===AGENT_BLOCKED==="
 FATAL_MARKER = "===AGENT_FATAL==="
 BROWSER_SERVICE = os.environ.get("PSEUDO_CODEX_BROWSER_SERVICE", "chatgpt-browser-agent.service")
 WORKER_ID = os.environ.get("PSEUDO_CODEX_WORKER_ID", f"{socket.gethostname()}-{os.getpid()}")
-MAX_WORKERS = max(1, int(os.environ.get("PSEUDO_CODEX_MAX_WORKERS", "3")))
+# One logged-in ChatGPT browser is a single external interaction channel.
+# Parallel agent processes race its tabs and can attach responses to the wrong
+# job. Queue jobs by default; explicit multi-browser workers can opt in later.
+MAX_WORKERS = max(1, int(os.environ.get("PSEUDO_CODEX_MAX_WORKERS", "1")))
 GITHUB_FIRST_PROJECTS = {"request-console"}
 
 
