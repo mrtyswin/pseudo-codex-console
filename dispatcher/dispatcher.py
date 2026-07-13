@@ -641,7 +641,11 @@ def cleanup_git_worktree(context: dict[str, Any] | None) -> None:
         LOG.warning("could not remove completed worktree path=%s detail=%s", worktree, git_error(result))
 
 
-def task_for(job: dict[str, Any], project_config: dict[str, Any] | None = None) -> str:
+def task_for(
+    job: dict[str, Any],
+    project_config: dict[str, Any] | None = None,
+    job_workspace: Path | None = None,
+) -> str:
     project_name = str(job.get("project", ""))
     project_config = project_config or get_project_config(project_name)
     git_config = project_config.get("git", {})
@@ -667,6 +671,9 @@ def task_for(job: dict[str, Any], project_config: dict[str, Any] | None = None) 
                 str(job.get("instruction", "")),
             ]
         )
+    effective_config = dict(project_config)
+    if job_workspace is not None:
+        effective_config["workspace"] = str(job_workspace)
     lines = [
             "You are the sole implementation agent for this queued local task.",
             "Run directly on the Ubuntu host and work only inside the provided host project directory.",
@@ -677,7 +684,10 @@ def task_for(job: dict[str, Any], project_config: dict[str, Any] | None = None) 
             "Do not claim success without command output that supports it.",
             "When verified, output ===TASK_COMPLETE=== on its own line.",
             "HOST DEPLOYMENT CONTRACT (authoritative):",
-            json.dumps(project_config, ensure_ascii=False, sort_keys=True),
+            json.dumps(effective_config, ensure_ascii=False, sort_keys=True),
+            "JOB WORKSPACE (authoritative): " + str(job_workspace or project_config.get("workspace", "")),
+            "Use this exact job workspace path for every file read, edit, command, and test.",
+            "Do not cd to the canonical main workspace when a dedicated worktree is provided.",
             "Execution is host-native: there is no isolated project workspace mapping.",
             "The working directory is the real Ubuntu job workspace or Git worktree.",
             "You may inspect Ubuntu host state with non-destructive commands such as ss, systemctl status, ps, and /proc reads.",
@@ -1116,7 +1126,7 @@ def run_job(job: dict[str, Any]) -> None:
             LOG.error("job=%s agent launch failed: %s", job_id, message)
             return
         assert process.stdin is not None
-        process.stdin.write(task_for(job, project_config))
+        process.stdin.write(task_for(job, project_config, cwd))
         process.stdin.close()
         update_progress(job_id, "sending_to_chatgpt", "Dispatcher agent起動 pid=" + str(process.pid), session_id, process.pid)
         last_heartbeat = 0.0

@@ -80,6 +80,11 @@ def main() -> None:
             "title": "Git publishing check",
         }
         workspace, context = dispatcher.prepare_job_workspace(job, source.resolve())
+        task = dispatcher.task_for(job, dispatcher.get_project_config("fixture-project"), workspace)
+        if f"JOB WORKSPACE (authoritative): {workspace}" not in task:
+            raise AssertionError(task)
+        if f'"workspace": "{workspace}"' not in task:
+            raise AssertionError(task)
         (workspace / "app.js").write_text("module.exports = 'after';\n", encoding="utf-8")
         ok, detail = dispatcher.publish_git_changes(job, context)
         if not ok:
