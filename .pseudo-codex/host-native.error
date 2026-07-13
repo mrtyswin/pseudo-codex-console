@@ -1,0 +1,9 @@
+HOST_NATIVE_PREFLIGHT_OK
+/home/runner/work/pseudo-codex-console/pseudo-codex-console/.pseudo-codex/apply-host-native.py:452: SyntaxWarning: invalid escape sequence '\/'
+  '''assert.match(source, /name="gitRepository"/);
+Traceback (most recent call last):
+  File "/home/runner/work/pseudo-codex-console/pseudo-codex-console/.pseudo-codex/apply-host-native.py", line 91, in <module>
+    replace_once(
+  File "/home/runner/work/pseudo-codex-console/pseudo-codex-console/.pseudo-codex/apply-host-native.py", line 12, in replace_once
+    raise RuntimeError(f"{relative}: expected one match, found {count}: {old[:120]!r}")
+RuntimeError: dispatcher/dispatcher.py: expected one match, found 0: '                "Do not inspect or execute host-only deployment paths; the host dispatcher deploys after TASK_COMPLETE."'
