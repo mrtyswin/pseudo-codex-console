@@ -124,7 +124,12 @@ schedule_dispatcher_restart() {
   if ((dispatcher_restart_scheduled)); then
     return 0
   fi
-  nohup bash -lc 'sleep 2; systemctl --user daemon-reload; systemctl --user restart pseudo-codex-dispatcher.service' >/dev/null 2>&1 &
+  local restart_unit="pseudo-codex-dispatcher-restart-${timestamp}-$$"
+  systemctl --user daemon-reload
+  systemd-run --user --quiet --collect \
+    --unit "$restart_unit" \
+    --on-active=2s \
+    /usr/bin/systemctl --user restart pseudo-codex-dispatcher.service
   dispatcher_restart_scheduled=1
 }
 
