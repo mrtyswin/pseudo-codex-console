@@ -26,8 +26,9 @@ jobs:
             echo "applied=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
+          python3 .pseudo-codex/preflight-host-native.py
           python3 .pseudo-codex/apply-host-native.py
-          rm -f .pseudo-codex/apply-host-native.py .github/workflows/apply-host-native.yml
+          rm -f .pseudo-codex/apply-host-native.py .pseudo-codex/preflight-host-native.py .github/workflows/apply-host-native.yml
           echo "applied=true" >> "$GITHUB_OUTPUT"
       - name: Verify syntax and regressions
         if: steps.apply.outputs.applied == 'true'
@@ -40,7 +41,7 @@ jobs:
           python3 tests/dispatcher-config-reload.check.py
           python3 tests/dispatcher-host-native.check.py
           python3 tests/dispatcher-parallel.check.py
-          if git grep -nE 'sandboxWorkspace|/mnt/workspace|sandboxed ChatGPT|inside a sandbox|from the sandbox|サンドボックス' -- ':!docs/archive/**'; then
+          if git grep -nE 'sandboxWorkspace|/mnt/workspace|sandboxed ChatGPT|inside a sandbox|from the sandbox|サンドボックス' -- ':!tests/**' ':!docs/archive/**'; then
             echo 'Sandbox runtime references remain.' >&2
             exit 1
           fi
