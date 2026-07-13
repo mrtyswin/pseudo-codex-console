@@ -1,9 +1,6 @@
 name: apply-host-native-execution
 
 on:
-  push:
-    branches:
-      - feature/host-native-execution
   pull_request:
     types: [opened, synchronize, reopened]
 
@@ -12,7 +9,7 @@ permissions:
 
 jobs:
   apply:
-    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
+    if: github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -42,7 +39,8 @@ jobs:
             git push origin HEAD:feature/host-native-execution
             exit "$status"
           fi
-          rm -f .pseudo-codex/host-native.error .pseudo-codex/apply-host-native.py .pseudo-codex/preflight-host-native.py .github/workflows/apply-host-native.yml
+          rm -f .pseudo-codex/host-native.error .pseudo-codex/apply-host-native.py .pseudo-codex/preflight-host-native.py
+          touch .pseudo-codex/host-native.applied
           echo "applied=true" >> "$GITHUB_OUTPUT"
       - name: Verify syntax and regressions
         id: verify
