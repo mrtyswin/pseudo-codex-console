@@ -211,7 +211,9 @@ function launchBrowser() {
 async function fillTextarea(page, text) {
   await page.waitForSelector('#prompt-textarea', { timeout: 10_000 });
   await page.click('#prompt-textarea');
-  await page.keyboard.press('Control+A');
+  await page.keyboard.down('Control');
+  await page.keyboard.press('A');
+  await page.keyboard.up('Control');
   await page.keyboard.press('Backspace');
   await page.keyboard.insertText(text);
   const minimumLength = Math.max(1, Math.floor(String(text).trim().length * 0.8));
