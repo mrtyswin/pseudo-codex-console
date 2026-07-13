@@ -21,4 +21,10 @@ jobs:
       - run: python3 tests/dispatcher-git.check.py
       - run: python3 tests/dispatcher-github-direct.check.py
       - run: python3 tests/dispatcher-config-reload.check.py
+      - run: python3 tests/dispatcher-host-native.check.py
       - run: python3 tests/dispatcher-parallel.check.py
+      - run: |
+          if git grep -nE 'sandboxWorkspace|/mnt/workspace|sandboxed ChatGPT|inside a sandbox|from the sandbox|サンドボックス' -- ':!tests/**' ':!docs/archive/**'; then
+            echo 'Sandbox runtime references remain.' >&2
+            exit 1
+          fi
