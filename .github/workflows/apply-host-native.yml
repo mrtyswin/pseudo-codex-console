@@ -32,28 +32,36 @@ jobs:
           skipped = {
               Path(".github/workflows/apply-host-native.yml"),
               Path(".pseudo-codex/sandbox-scan.log"),
+              Path(".pseudo-codex/host-wrapper-refs.log"),
           }
           matches = []
+          wrapper_refs = []
           for path in Path(".").rglob("*"):
               if not path.is_file() or ".git" in path.parts or "node_modules" in path.parts:
-                  continue
-              if path.parts[:1] == ("tests",) or path.parts[:2] == ("docs", "archive") or path in skipped:
                   continue
               try:
                   text = path.read_text(encoding="utf-8")
               except (UnicodeDecodeError, OSError):
                   continue
-              for value in forbidden:
-                  if value in text:
-                      matches.append(f"{path}: {value}")
-          output = "\n".join(matches) + ("\n" if matches else "HOST_NATIVE_SCAN_CLEAN\n")
-          Path(".pseudo-codex/sandbox-scan.log").write_text(output, encoding="utf-8")
-          print(output, end="")
+              if not (path.parts[:1] == ("tests",) or path.parts[:2] == ("docs", "archive") or path in skipped):
+                  for value in forbidden:
+                      if value in text:
+                          matches.append(f"{path}: {value}")
+              if path not in skipped:
+                  for line_number, line in enumerate(text.splitlines(), 1):
+                      if "chatgpt-browser-agent-sandbox" in line or "run-host" in line or "PSEUDO_CODEX_AGENT" in line:
+                          wrapper_refs.append(f"{path}:{line_number}: {line}")
+          sandbox_output = "\n".join(matches) + ("\n" if matches else "HOST_NATIVE_SCAN_CLEAN\n")
+          refs_output = "\n".join(wrapper_refs) + ("\n" if wrapper_refs else "HOST_WRAPPER_REFS_NONE\n")
+          Path(".pseudo-codex/sandbox-scan.log").write_text(sandbox_output, encoding="utf-8")
+          Path(".pseudo-codex/host-wrapper-refs.log").write_text(refs_output, encoding="utf-8")
+          print(sandbox_output, end="")
+          print(refs_output, end="")
           PY
           git config user.name "Pseudo Codex GitHub Direct"
           git config user.email "pseudo-codex@example.invalid"
-          git add -f .pseudo-codex/sandbox-scan.log
+          git add -f .pseudo-codex/sandbox-scan.log .pseudo-codex/host-wrapper-refs.log
           if ! git diff --cached --quiet; then
-            git commit -m "Record host-native runtime scan"
+            git commit -m "Record host-native runtime references"
             git push origin HEAD:feature/host-native-execution
           fi
