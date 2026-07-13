@@ -205,18 +205,29 @@ function launchBrowser() {
   });
 }
 
-// Single DOM operation — no keystroke simulation, no chunking, no delay.
-// execCommand('insertText') is the fastest reliable way to fill a
-// React-controlled contenteditable without breaking its event listeners.
+// Use Chrome's native text insertion so ProseMirror receives real input
+// events. The legacy DOM insertion API can report success while leaving the
+// current ChatGPT composer empty.
 async function fillTextarea(page, text) {
   await page.waitForSelector('#prompt-textarea', { timeout: 10_000 });
   await page.click('#prompt-textarea');
-  await page.evaluate(t => {
-    const el = document.querySelector('#prompt-textarea');
-    el.focus();
-    document.execCommand('selectAll', false, null);
-    document.execCommand('insertText', false, t);
-  }, text);
+  await page.keyboard.press('Control+A');
+  await page.keyboard.press('Backspace');
+  await page.keyboard.insertText(text);
+  const minimumLength = Math.max(1, Math.floor(String(text).trim().length * 0.8));
+  await page.waitForFunction(
+    expected => {
+      const composer = document.querySelector('#prompt-textarea');
+      if (!composer) return false;
+      const visibleLength = (composer.innerText || '').trim().length;
+      const contentLength = (composer.textContent || '').trim().length;
+      return Math.max(visibleLength, contentLength) >= expected;
+    },
+    { timeout: 10_000, polling: 250 },
+    minimumLength
+  ).catch(() => {
+    throw new Error('CHATGPT_PROMPT_INPUT_FAILED composer remained empty or incomplete');
+  });
 }
 
 async function snapshotAssistantState(page) {
