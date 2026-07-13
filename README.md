@@ -49,13 +49,13 @@ python3 -m py_compile dispatcher/dispatcher.py scripts/chatgpt-compose.py script
 
 ## Request-Console Self-Update
 
-`request-console` 自身の改修は Ubuntu 上の Codex CLI だけで行います。Codex CLI は専用 branch と pull request を作成し、GitHub `main` への merge 後、Ubuntu `main` は `pull --ff-only` とテストと deploy だけを担当します。request-console のブラウザ queue から自己改修は行いません。
+`request-console` 自身の改修もブラウザ queue から登録できます。dispatcher は通常 workspace の `main` を直接編集せず、ジョブ専用の Git worktree と branch で変更・検証・公開を行います。GitHub `main` への反映後、Ubuntu `main` は `pull --ff-only` とテストと deploy だけを担当します。
 
 実運用の `request-console` 例:
 
 ```json
 {
-  "executionMode": "verify_only",
+  "executionMode": "local",
   "workspace": "/home/ubuntu/chatgpt-projects/request-console",
   "deployCommand": "/usr/local/libexec/pseudo-codex-deploy-request-console",
   "verifyCommand": "/usr/local/lib/pseudo-codex-console-deploy/verify-live.js",

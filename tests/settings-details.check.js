@@ -14,7 +14,7 @@ assert.match(source, /class="settings-content"/);
 assert.match(source, /ChatGPTとのやり取り/);
 assert.match(source, /name="executionMode"/);
 assert.match(source, /Codex CLI.*専用 branch \/ PR/);
-assert.match(source, /CODEX_CLI_ONLY_PROJECTS\.has\(name\) \? "verify_only"/);
+assert.doesNotMatch(source, /CODEX_CLI_ONLY_PROJECTS/);
 assert.match(source, /name="gitRepository"/);
 assert.match(source, /Ubuntuホスト直接実行/);
 assert.doesNotMatch(source, /sandboxWorkspace|Sandbox Workspace|\/mnt\/workspace/);

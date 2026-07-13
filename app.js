@@ -18,7 +18,6 @@ const STARTED_AT = new Date().toISOString();
 const DEFAULT_PROJECT = "request-console";
 const PROJECT_PATTERN = /^[a-z0-9][a-z0-9-]{0,63}$/;
 const GITHUB_FIRST_PROJECTS = new Set(["request-console"]);
-const CODEX_CLI_ONLY_PROJECTS = new Set(["request-console"]);
 const WORKER_LOG_LIMIT = Number.parseInt(
 process.env.WORKER_LOG_LIMIT || "12000",
 10
@@ -1979,7 +1978,7 @@ const git = projectGitConfig(config);
 const configuredExecutionMode = ["github_direct", "local", "verify_only"].includes(config.executionMode)
 ? config.executionMode
 : (git.enabled && git.repository ? "github_direct" : "local");
-const executionMode = CODEX_CLI_ONLY_PROJECTS.has(name) ? "verify_only" : configuredExecutionMode;
+const executionMode = configuredExecutionMode;
 return {
 name,
 executionMode,
@@ -1992,7 +1991,7 @@ healthUrl: typeof config.healthUrl === "string" ? config.healthUrl : "",
 deploymentOwner: typeof config.deploymentOwner === "string" ? config.deploymentOwner : "",
 requiresDeployment: config.requiresDeployment === true,
 githubFirst: GITHUB_FIRST_PROJECTS.has(name),
-codexCliOnly: CODEX_CLI_ONLY_PROJECTS.has(name),
+codexCliOnly: false,
 git
 };
 }
