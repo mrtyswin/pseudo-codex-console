@@ -337,7 +337,7 @@ async function detectUsageLimit(page) {
   }).catch(() => '');
 }
 
-async function waitWithRecovery(page, fullPrompt, log, beforeState) {
+async function waitWithRecovery(page, fullPrompt, log, beforeState, interact) {
   try {
     await waitForStreamingDone(page, log, beforeState, RESPONSE_TIMEOUT);
     return;
@@ -347,9 +347,11 @@ async function waitWithRecovery(page, fullPrompt, log, beforeState) {
       throw new Error(`MODEL_USAGE_LIMIT: ${usageLimit}`);
     }
     log(`No completed response after ${RESPONSE_TIMEOUT}ms; reloading the ChatGPT page once.`);
-    await page.reload({ waitUntil: 'domcontentloaded', timeout: 30_000 });
-    await page.waitForSelector('#prompt-textarea', { timeout: 20_000 });
-    await new Promise(resolve => setTimeout(resolve, 3_000));
+    await interact(async () => {
+      await page.reload({ waitUntil: 'domcontentloaded', timeout: 30_000 });
+      await page.waitForSelector('#prompt-textarea', { timeout: 20_000 });
+      await new Promise(resolve => setTimeout(resolve, 3_000));
+    });
 
     const reloadedUsageLimit = await detectUsageLimit(page);
     if (reloadedUsageLimit) {
@@ -373,7 +375,7 @@ async function waitWithRecovery(page, fullPrompt, log, beforeState) {
     }
 
     log('No response is active after reload; resubmitting the same prompt once.');
-    const retryState = await submitPrompt(page, fullPrompt, log);
+    const retryState = await interact(() => submitPrompt(page, fullPrompt, log));
     try {
       await waitForStreamingDone(page, log, retryState, RECOVERY_RESPONSE_TIMEOUT);
     } catch (retryError) {
@@ -466,16 +468,25 @@ async function startDaemonProcess() {
     process.exit(1);
   }
 
-  // Chrome can leave one CDP navigation hung when two pages navigate at the
-  // same instant. Serialize only page navigation; prompt submission and
-  // response streaming remain concurrent after both pages are ready.
-  let navigationTail = Promise.resolve();
-  const navigateSessionPage = (page, targetUrl) => {
-    const current = navigationTail
+  // Chrome page navigation and focus-dependent composer operations must not
+  // race across tabs. Keep those short interactions serialized and focused,
+  // then release the queue while ChatGPT responses stream concurrently.
+  let browserInteractionTail = Promise.resolve();
+  const withBrowserInteraction = (page, task) => {
+    const current = browserInteractionTail
       .catch(() => {})
-      .then(() => navigateWithRetry(page, targetUrl, log));
-    navigationTail = current.catch(() => {});
+      .then(async () => {
+        if (typeof page.bringToFront === 'function') await page.bringToFront();
+        return task();
+      });
+    browserInteractionTail = current.catch(() => {});
     return current;
+  };
+  const navigateSessionPage = (page, targetUrl) => {
+    return withBrowserInteraction(
+      page,
+      () => navigateWithRetry(page, targetUrl, log)
+    );
   };
 
   const getSession = async (key, activeSessionFile) => {
@@ -567,22 +578,29 @@ async function startDaemonProcess() {
                 ? adapterResult.response
                 : adapterResult;
             } else {
-              if (uploadPath) await uploadFileToChatGPT(page, uploadPath, log);
-              if (uploadPath) {
-                log('Waiting for send button to become enabled (file upload in progress)...');
-                await page.waitForFunction(
-                  () => {
-                    const btn = document.querySelector('button[data-testid="send-button"]');
-                    return btn && !btn.disabled;
-                  },
-                  { timeout: 60_000 }
-                );
-                log('Send button is now enabled.');
-              }
-
-              const beforeState = await submitPrompt(page, fullPrompt, log);
+              const beforeState = await withBrowserInteraction(page, async () => {
+                if (uploadPath) await uploadFileToChatGPT(page, uploadPath, log);
+                if (uploadPath) {
+                  log('Waiting for send button to become enabled (file upload in progress)...');
+                  await page.waitForFunction(
+                    () => {
+                      const btn = document.querySelector('button[data-testid="send-button"]');
+                      return btn && !btn.disabled;
+                    },
+                    { timeout: 60_000 }
+                  );
+                  log('Send button is now enabled.');
+                }
+                return submitPrompt(page, fullPrompt, log);
+              });
               log('Prompt sent, waiting for response...');
-              await waitWithRecovery(page, fullPrompt, log, beforeState);
+              await waitWithRecovery(
+                page,
+                fullPrompt,
+                log,
+                beforeState,
+                task => withBrowserInteraction(page, task)
+              );
               raw = await extractLastAssistantMessage(page);
             }
 
