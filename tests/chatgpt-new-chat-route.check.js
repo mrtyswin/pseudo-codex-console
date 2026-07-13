@@ -15,5 +15,8 @@ assert.match(source, /button\[data-testid="send-button"\]/);
 assert.match(source, /Submitted via send button/);
 assert.match(source, /CHATGPT_SEND_BUTTON_UNAVAILABLE after prompt input/);
 assert.doesNotMatch(source, /keyboard\.press\(['"]Enter['"]\)/);
+assert.match(source, /keyboard\.insertText\(text\)/);
+assert.match(source, /CHATGPT_PROMPT_INPUT_FAILED composer remained empty or incomplete/);
+assert.doesNotMatch(source, /execCommand\(['"]insertText['"]/);
 
 console.log("CHATGPT_NEW_CHAT_ROUTE_OK");
