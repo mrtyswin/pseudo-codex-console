@@ -50,6 +50,7 @@ COMPLETE_MARKER = "===TASK_COMPLETE==="
 BROWSER_SERVICE = os.environ.get("PSEUDO_CODEX_BROWSER_SERVICE", "chatgpt-browser-agent.service")
 WORKER_ID = os.environ.get("PSEUDO_CODEX_WORKER_ID", f"{socket.gethostname()}-{os.getpid()}")
 MAX_WORKERS = max(1, int(os.environ.get("PSEUDO_CODEX_MAX_WORKERS", "3")))
+GITHUB_FIRST_PROJECTS = {"request-console"}
 
 
 def load_project_configs() -> dict[str, dict[str, Any]]:
@@ -287,6 +288,10 @@ def sync_primary_workspace(
     if actual_commit != expected_commit:
         return False, f"UBUNTU_WORKSPACE_COMMIT_MISMATCH expected={expected_commit} actual={actual_commit}"
     return True, f"UBUNTU_SYNC_OK commit={actual_commit}"
+
+
+def is_github_first_project(project_name: str) -> bool:
+    return project_name in GITHUB_FIRST_PROJECTS
 
 
 def prepare_job_workspace(
@@ -569,6 +574,26 @@ def publish_github_direct_changes(
     )
 
 
+def sync_workspace_to_origin_main(project_name: str, workspace: Path) -> tuple[bool, str]:
+    git_config = PROJECT_CONFIGS.get(project_name, {}).get("git", {})
+    if not isinstance(git_config, dict) or not git_config.get("enabled", False):
+        return True, "GIT_SYNC_NOT_CONFIGURED"
+    remote = str(git_config.get("remote", "origin"))
+    base_branch = str(git_config.get("baseBranch", "main"))
+    fetch = run_git(workspace, ["fetch", "--prune", remote, base_branch], timeout=300)
+    if fetch.returncode != 0:
+        return False, "Cannot fetch Git base branch before deploy: " + git_error(fetch)
+    pull = run_git(workspace, ["pull", "--ff-only", remote, base_branch], timeout=300)
+    if pull.returncode != 0:
+        return False, "Cannot fast-forward workspace to remote main before deploy: " + git_error(pull)
+    head = run_git(workspace, ["rev-parse", "HEAD"])
+    remote_head = run_git(workspace, ["rev-parse", f"{remote}/{base_branch}"])
+    return True, (
+        "GIT_SYNC_OK local=" + head.stdout.strip() +
+        " remote=" + remote_head.stdout.strip()
+    )
+
+
 def cleanup_git_worktree(context: dict[str, Any] | None) -> None:
     if context is None or "worktree" not in context:
         return
@@ -635,6 +660,16 @@ def task_for(job: dict[str, Any], project_config: dict[str, Any] | None = None) 
                 "Make file changes only inside the dedicated Ubuntu host Git worktree for this job.",
                 "Do not attempt manual git push credentials setup inside the task.",
                 "After you verify the change and output ===TASK_COMPLETE===, the host dispatcher will commit and optionally push using host-side credentials if configured.",
+            ]
+        )
+    if is_github_first_project(project_name):
+        lines.extend(
+            [
+                "",
+                "REQUEST-CONSOLE SPECIAL RULE:",
+                "This project deploys only from GitHub main after a host-side pull --ff-only.",
+                "Do not assume sandbox edits become production immediately.",
+                "A successful production deploy requires the host workspace to fast-forward to remote main first.",
             ]
         )
     if int(job.get("attempts", 0)) > 1:
@@ -830,7 +865,16 @@ def run_auto_deploy(
     for attempt in range(1, 3):
         try:
             deploy_environment = os.environ.copy()
-            deploy_environment["PSEUDO_CODEX_JOB_WORKSPACE"] = str(workspace)
+            deploy_workspace = workspace
+            sync_output = ""
+            if is_github_first_project(project_name):
+                source_workspace = project_path(project_name)
+                sync_ok, sync_output = sync_workspace_to_origin_main(project_name, source_workspace)
+                if not sync_ok:
+                    outputs.append(sync_output)
+                    return False, "\n\n".join(outputs)
+                deploy_workspace = source_workspace
+            deploy_environment["PSEUDO_CODEX_JOB_WORKSPACE"] = str(deploy_workspace)
             result = subprocess.run(
                 [deploy_command],
                 text=True,
@@ -842,6 +886,8 @@ def run_auto_deploy(
                 check=False,
             )
             output = compact((result.stdout or "") + (result.stderr or ""), 20_000)
+            if sync_output:
+                output = sync_output + "\n" + output
             outputs.append(f"auto-deploy attempt={attempt} exit={result.returncode}\n{output}".strip())
             if result.returncode != 0:
                 if attempt == 1:

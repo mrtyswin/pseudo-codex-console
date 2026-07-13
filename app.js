@@ -17,6 +17,7 @@ process.env.RESULT_LOG_ROOT || path.join(HOME_PATH, ".local", "state", "pseudo-c
 const STARTED_AT = new Date().toISOString();
 const DEFAULT_PROJECT = "request-console";
 const PROJECT_PATTERN = /^[a-z0-9][a-z0-9-]{0,63}$/;
+const GITHUB_FIRST_PROJECTS = new Set(["request-console"]);
 const WORKER_LOG_LIMIT = Number.parseInt(
 process.env.WORKER_LOG_LIMIT || "12000",
 10
@@ -1973,6 +1974,7 @@ service: typeof config.service === "string" ? config.service : "",
 healthUrl: typeof config.healthUrl === "string" ? config.healthUrl : "",
 deploymentOwner: typeof config.deploymentOwner === "string" ? config.deploymentOwner : "",
 requiresDeployment: config.requiresDeployment === true,
+githubFirst: GITHUB_FIRST_PROJECTS.has(name),
 git
 };
 }
@@ -3112,7 +3114,7 @@ const deployMode = summary.requiresDeployment
 ? (summary.deployCommand ? "ホスト反映あり" : "要反映だが deployCommand 未設定")
 : "反映不要";
 const note = name === DEFAULT_PROJECT
-? '<div class="project-note"><strong>推奨:</strong> このプロジェクトは GitHub を正本にして、ChatGPT には repo 上の変更作成をさせるのが安定です。ホスト反映は dispatcher が担当します。</div>'
+? '<div class="project-note"><strong>固定ルール:</strong> このプロジェクトは GitHub main から pull --ff-only した内容だけを deploy します。サンドボックス変更物をそのまま本番へ反映しません。</div>'
 : "";
 return [
 '<article class="project-card">',
@@ -3124,7 +3126,7 @@ summary.healthUrl ? '<a href="' + escapeHtml(summary.healthUrl) + '" target="_bl
 '<div class="project-facts"><span>実行方式: <strong>', escapeHtml(executionMode), '</strong></span></div>',
 summary.productionRoot ? '<div class="project-facts"><span>Production Root: <strong>' + escapeHtml(summary.productionRoot) + '</strong></span></div>' : "",
 summary.service ? '<div class="project-facts"><span>Service: <strong>' + escapeHtml(summary.service) + '</strong></span></div>' : "",
-summary.git.enabled ? '<div class="project-facts"><span>Repository: <strong>' + escapeHtml(summary.git.repository || "(未設定)") + '</strong></span><span>Remote: <strong>' + escapeHtml(summary.git.remote) + '</strong></span><span>Base: <strong>' + escapeHtml(summary.git.baseBranch) + '</strong></span><span>Branch Prefix: <strong>' + escapeHtml(summary.git.branchPrefix) + '</strong></span></div>' : "",
+summary.git.enabled ? '<div class="project-facts"><span>Repository: <strong>' + escapeHtml(summary.git.repository || "(未設定)") + '</strong></span><span>Remote: <strong>' + escapeHtml(summary.git.remote) + '</strong></span><span>Base: <strong>' + escapeHtml(summary.git.baseBranch) + '</strong></span><span>Branch Prefix: <strong>' + escapeHtml(summary.git.branchPrefix) + '</strong></span><span>Deploy Source: <strong>' + escapeHtml(summary.githubFirst ? "GitHub main only" : "workspace") + '</strong></span></div>' : "",
 note,
 '</article>'
 ].join("");
