@@ -56,6 +56,7 @@ WORKER_ID = os.environ.get("PSEUDO_CODEX_WORKER_ID", f"{socket.gethostname()}-{o
 # job. Queue jobs by default; explicit multi-browser workers can opt in later.
 MAX_WORKERS = max(1, int(os.environ.get("PSEUDO_CODEX_MAX_WORKERS", "1")))
 GITHUB_FIRST_PROJECTS = {"request-console"}
+CODEX_CLI_ONLY_PROJECTS = {"request-console"}
 
 
 def agent_marker(output: str, marker: str) -> dict[str, str] | None:
@@ -339,6 +340,11 @@ def prepare_job_workspace(
     project_name = str(job["project"])
     config = project_config or get_project_config(project_name)
     execution_mode = str(config.get("executionMode", "local"))
+    if project_name in CODEX_CLI_ONLY_PROJECTS and execution_mode != "verify_only":
+        raise RuntimeError(
+            "REQUEST_CONSOLE_CODEX_CLI_ONLY: maintain request-console from the Ubuntu Codex CLI "
+            "on a dedicated GitHub branch; merge by pull request, then pull --ff-only and deploy"
+        )
     if execution_mode == "verify_only":
         return source_workspace, None
     git_config = config.get("git", {})

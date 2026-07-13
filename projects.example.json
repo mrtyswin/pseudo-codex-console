@@ -1,6 +1,6 @@
 {
   "request-console": {
-    "executionMode": "local",
+    "executionMode": "verify_only",
     "workspace": "/path/to/request-console",
     "productionRoot": "/path/to/production-root",
     "deployCommand": "/path/to/deploy-command",

@@ -22,14 +22,16 @@ Continue maintaining Pseudo Codex Console directly from the always-on Ubuntu hos
 4. Make changes only in the repository.
 5. Run `npm run check` and `npm run check:syntax`.
 6. For dispatcher changes, also run `python3 tests/dispatcher-host-native.check.py` and `python3 tests/dispatcher-parallel.check.py`.
-7. Commit and push to `main` only after checks pass.
-8. Run `/usr/local/libexec/pseudo-codex-deploy-request-console` as user `ubuntu` (not through `sudo`).
-9. Confirm `curl -fsS http://127.0.0.1:8090/health` and `systemctl --user is-active pseudo-codex-dispatcher.service`.
+7. Create an `agent/<description>` branch. Never commit on Ubuntu `main`.
+8. Commit and push only that branch, then open a pull request into GitHub `main`.
+9. After the pull request is merged, return Ubuntu to `main` and run `scripts/deploy-request-console-main` as user `ubuntu` (not through `sudo`). It performs `pull --ff-only`, all checks, deploy, health, and dispatcher checks.
+
+Do not use the request-console browser queue to modify request-console itself. Self-maintenance is exclusively an Ubuntu Codex CLI workflow. `verify_only` may still be used for read-only browser diagnostics.
 
 ## Current Design Constraints
 
-- Jobs execute on the real Ubuntu host, not a sandbox workspace.
-- `request-console` is GitHub-first. Ubuntu must pull/deploy; do not commit unreviewed runtime changes directly into production paths.
+- Normal queued jobs execute on the real Ubuntu host.
+- `request-console` self-maintenance is Codex CLI-only and GitHub-first. Ubuntu `main` only fast-forwards and deploys; it never authors commits.
 - A single logged-in ChatGPT browser is one external interaction channel. `PSEUDO_CODEX_MAX_WORKERS=1` is required. Jobs may queue, but must not run in parallel through one Chrome profile.
 - The dispatcher is the sole owner of terminal job states. The browser agent emits progress and markers only; it must not independently mark jobs done, failed, or blocked.
 - Browser agent runtime files are deployed from `agent/agent.js` and `agent/chatgpt.js`.
