@@ -18,5 +18,17 @@ for old, new in replacements.items():
     if count != 1:
         raise RuntimeError(f"expected one match, found {count}: {old!r}")
     text = text.replace(old, new, 1)
+
+obsolete = '''replace_once(
+    "dispatcher/dispatcher.py",
+    '                "Do not inspect or execute host-only deployment paths; the host dispatcher deploys after TASK_COMPLETE.",',
+    '                "Use the real Ubuntu host workspace for inspection and verification; the dispatcher still owns publication and deployment after TASK_COMPLETE.",',
+)
+'''
+count = text.count(obsolete)
+if count != 1:
+    raise RuntimeError(f"expected one obsolete dispatcher replacement, found {count}")
+text = text.replace(obsolete, "", 1)
+
 path.write_text(text, encoding="utf-8")
 print("HOST_NATIVE_PREFLIGHT_OK")
