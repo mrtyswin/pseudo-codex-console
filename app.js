@@ -932,6 +932,20 @@ function formatDate(value) {
   return Number.isNaN(date.getTime()) ? '' : formatter.format(date) + ' JST';
 }
 
+function updateQueueSummary(jobs) {
+  var node = document.getElementById('queue-summary');
+  if (!node) return;
+  var running = jobs.filter(function (job) { return job.status === 'running'; }).length;
+  var queued = jobs.filter(function (job) { return job.stage === 'queued'; }).length;
+  var failed = jobs.filter(function (job) { return job.stage === 'failed' || job.stage === 'blocked'; }).length;
+  var stopped = jobs.filter(function (job) { return job.stage === 'stopped'; }).length;
+  node.innerHTML = '<div><strong>いま動いている:</strong> ' + running + ' 件</div>' +
+    '<div><strong>実行待ち:</strong> ' + queued + ' 件</div>' +
+    '<div><strong>失敗・保留:</strong> ' + failed + ' 件</div>' +
+    '<div><strong>停止済み:</strong> ' + stopped + ' 件</div>' +
+    '<p>「実行中」はUbuntu上のworkerが担当中です。停止を押したジョブは次回更新で「停止済み」に変わります。</p>';
+}
+
 function sanitizeUserFacingText(value) {
   return String(value == null ? '' : value)
     .replace(/[^]+/g, '')
@@ -1147,6 +1161,7 @@ async function refreshJobs() {
     if (!response.ok) return;
     var payload = await response.json();
     cachedJobs = Array.isArray(payload.jobs) ? payload.jobs : [];
+    updateQueueSummary(cachedJobs);
     var container = document.getElementById('jobs');
     if (!container) return;
     cachedJobs.forEach(function (job, index) {
@@ -2360,7 +2375,10 @@ workerLog: String(value.workerLog || ""),
 result: String(value.result || ""),
 finalAnswer: String(value.finalAnswer || ""),
 executionResult: String(value.executionResult || ""),
-verificationResult: String(value.verificationResult || "")
+verificationResult: String(value.verificationResult || ""),
+workerId: String(value.workerId || "").trim().slice(0, 200),
+sessionId: String(value.sessionId || "").trim().slice(0, 200),
+pid: boundedInteger(value.pid, 1, 2147483647, null)
 };
 }
 
@@ -2453,6 +2471,13 @@ now.getTime() + worker.leaseSeconds * 1000
 ).toISOString();
 }
 
+function isStaleWorkerUpdate(job, worker) {
+return Boolean(
+(job.sessionId && worker.sessionId && job.sessionId !== worker.sessionId) ||
+(job.pid && worker.pid && job.pid !== worker.pid)
+);
+}
+
 function claimOldestJob(worker) {
 return mutateJobs(function(jobs) {
 let selectedIndex = -1;
@@ -2510,6 +2535,10 @@ return candidate.id === id;
 
 if (!job) {
   return null;
+}
+
+if (isStaleWorkerUpdate(job, progress)) {
+  return job;
 }
 
 applyStage(job, progress.stage, progress.message);
@@ -2605,12 +2634,27 @@ return candidate.id === id;
 if (!job) {
 return null;
 }
-if (job.stage === "completed" || job.stage === "failed") {
-return job;
+const stopReason = reason || "手動停止";
+const descendantIds = new Set([job.id]);
+let discovered = true;
+while (discovered) {
+discovered = false;
+jobs.forEach(function(candidate) {
+if (!descendantIds.has(candidate.id) && descendantIds.has(candidate.parentJobId)) {
+descendantIds.add(candidate.id);
+discovered = true;
 }
-job.lastError = "";
-job.currentCommand = "";
-applyStage(job, "stopped", reason || "手動停止");
+});
+}
+
+jobs.forEach(function(candidate) {
+if (!descendantIds.has(candidate.id) || candidate.stage === "completed") return;
+candidate.lastError = "";
+candidate.currentCommand = "";
+if (candidate.id === job.id || !["failed", "stopped", "blocked"].includes(candidate.stage)) {
+applyStage(candidate, "stopped", candidate.id === job.id ? stopReason : "親ジョブの停止により停止");
+}
+});
 return job;
 });
 }
@@ -2794,6 +2838,10 @@ if (!job) {
 }
 
 if (["stopped", "blocked"].includes(job.stage) && result.status !== job.status) {
+return job;
+}
+
+if (isStaleWorkerUpdate(job, result)) {
 return job;
 }
 
@@ -3072,6 +3120,24 @@ return '<p class="empty">登録済みジョブはありません。</p>';
 return jobs.map(renderJobCard).join("");
 }
 
+function renderQueueSummary(jobs) {
+const counts = {
+running: jobs.filter(function(job) { return job.status === "running"; }).length,
+queued: jobs.filter(function(job) { return job.stage === "queued"; }).length,
+failed: jobs.filter(function(job) { return job.stage === "failed" || job.stage === "blocked"; }).length,
+stopped: jobs.filter(function(job) { return job.stage === "stopped"; }).length
+};
+return [
+'<section id="queue-summary" class="queue-summary" aria-live="polite">',
+'<div><strong>いま動いている:</strong> ', String(counts.running), ' 件</div>',
+'<div><strong>実行待ち:</strong> ', String(counts.queued), ' 件</div>',
+'<div><strong>失敗・保留:</strong> ', String(counts.failed), ' 件</div>',
+'<div><strong>停止済み:</strong> ', String(counts.stopped), ' 件</div>',
+'<p>「実行中」はUbuntu上のworkerが担当中です。停止を押したジョブは次回更新で「停止済み」に変わります。</p>',
+'</section>'
+].join("");
+}
+
 function renderProjectOptions() {
 const names = Object.keys(readProjectConfigs())
 .filter(function(name) { return PROJECT_PATTERN.test(name); })
@@ -3193,6 +3259,7 @@ return [
 ".card,.job{background:#fff;border:1px solid #dbe1ea;border-radius:12px;padding:20px;box-shadow:0 3px 12px rgba(20,35,60,.05)}",
 ".card{margin-bottom:20px}",
 ".notice{border-left:5px solid #2458c6;background:#eef4ff}",
+".queue-summary{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin:0 0 20px}.queue-summary>div{padding:12px;border:1px solid #dbe1ea;border-radius:10px;background:#fbfcff}.queue-summary>p{grid-column:1/-1;margin:0;color:#687386;font-size:.88rem}",
 ".health{display:inline-flex;align-items:center;gap:8px;font-weight:700}",
 ".dot{width:10px;height:10px;border-radius:50%;background:#16883f}",
 "label{display:block;font-weight:700;margin:14px 0 6px}",
@@ -3255,7 +3322,7 @@ return [
 ".history-status{font-size:.82rem;font-weight:700;color:#765600}",
 ".history-log{display:block;max-block-size:min(48dvh,28rem);min-block-size:10rem;overflow:auto;overscroll-behavior:contain;white-space:pre-wrap;overflow-wrap:anywhere;word-break:break-word;user-select:text;cursor:text}",
 ".empty{text-align:center;color:#687386}",
-"@media(max-width:700px){main{width:min(100% - 20px,1200px);margin:20px auto}.card,.job,.project-card{padding:16px}.settings-details{padding:0}.settings-details>summary{padding:14px 16px}.settings-content{padding:0 16px 16px}header,.job-head,.project-card-head{display:block}.health,.badges{margin-top:12px;justify-content:flex-start}.job-filters,.project-config-grid{grid-template-columns:1fr}.result-count{justify-self:start;padding-bottom:0}}",
+"@media(max-width:700px){main{width:min(100% - 20px,1200px);margin:20px auto}.card,.job,.project-card{padding:16px}.settings-details{padding:0}.settings-details>summary{padding:14px 16px}.settings-content{padding:0 16px 16px}header,.job-head,.project-card-head{display:block}.health,.badges{margin-top:12px;justify-content:flex-start}.job-filters,.project-config-grid,.queue-summary{grid-template-columns:1fr}.result-count{justify-self:start;padding-bottom:0}}",
 "</style>",
 "</head>",
 "<body>",
@@ -3268,6 +3335,7 @@ return [
 "<strong>処理担当をリアルタイム表示</strong>",
 "<p>UbuntuとChatGPTの担当、処理段階、最終回答・実行結果・検証結果を表示します。</p>",
 "</section>",
+renderQueueSummary(jobs),
 '<section class="card">',
 "<h2>新規ジョブ</h2>",
 messageHtml,

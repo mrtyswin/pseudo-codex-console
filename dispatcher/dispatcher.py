@@ -728,6 +728,8 @@ def update_result(
     last_error: str,
     detail: str = "",
     verification_result: str | None = None,
+    session_id: str = "",
+    pid: int | None = None,
 ) -> None:
     path = "/api/jobs/" + parse.quote(job_id, safe="") + "/result"
     current = get_job(job_id) or {}
@@ -745,6 +747,9 @@ def update_result(
                 if verification_result is None
                 else compact(verification_result, 20_000)
             ),
+            "workerId": WORKER_ID,
+            "sessionId": session_id,
+            "pid": pid,
         },
     )
 
@@ -990,7 +995,7 @@ def run_auto_deploy(
 def run_job(job: dict[str, Any]) -> None:
     job_id = str(job["id"])
     attempts = int(job.get("attempts", 0))
-    session_id = uuid.uuid4().hex
+    session_id = str(job.get("sessionId") or uuid.uuid4().hex)
     try:
         project_config = get_project_config(str(job["project"]))
         source_workspace = project_path(str(job["project"]), project_config)
@@ -1196,6 +1201,8 @@ def run_job(job: dict[str, Any]) -> None:
                 "",
                 "Completed by ChatGPT browser agent.\n" + combined_output,
                 verification_result=combined_output,
+                session_id=session_id,
+                pid=process.pid,
             )
             cleanup_git_worktree(git_context)
             LOG.info("completed and deployed job=%s", job_id)
@@ -1203,17 +1210,17 @@ def run_job(job: dict[str, Any]) -> None:
 
     if deployment_failed:
         detail = compact(read_log_tail(path), 8000)
-        update_result(job_id, "needs_human", failure, detail)
+        update_result(job_id, "needs_human", failure, detail, session_id=session_id, pid=process.pid)
         LOG.error("job=%s deployment needs human review: %s", job_id, failure)
         return
 
     restart_log = restart_browser()
     detail = compact(output, 6000) + "\n\nBrowser restart:\n" + restart_log
     if attempts >= MAX_ATTEMPTS:
-        update_result(job_id, "needs_human", failure, detail)
+        update_result(job_id, "needs_human", failure, detail, session_id=session_id, pid=process.pid)
         LOG.error("job=%s needs human review: %s", job_id, failure)
     else:
-        update_result(job_id, "queued", failure, detail)
+        update_result(job_id, "queued", failure, detail, session_id=session_id, pid=process.pid)
         LOG.warning("job=%s queued for retry after %ss: %s", job_id, RETRY_DELAY_SECONDS, failure)
         time.sleep(RETRY_DELAY_SECONDS)
 

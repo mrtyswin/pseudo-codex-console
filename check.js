@@ -194,13 +194,50 @@ finalAnswer: "", executionResult: "", verificationResult: ""
 assert.equal(duplicateFailure.continuationJobId, failed.continuationJobId);
 const manualContinuation = await postJson("/api/jobs/" + failedCreated.id + "/recover", {});
 assert.equal(manualContinuation.id, failed.continuationJobId);
-assert.equal((await claim()).id, continuation.id);
+const claimedContinuation = await claim();
+assert.equal(claimedContinuation.id, continuation.id);
+const staleProgress = await postJson("/api/jobs/" + continuation.id + "/progress", {
+stage: "writing_file",
+message: "stale worker update",
+workerId: "old-worker",
+sessionId: "old-session",
+pid: 999999,
+leaseSeconds: 120
+});
+assert.equal(staleProgress.stage, "sending_to_chatgpt", "stale progress must not replace the active worker");
+const staleResult = await postJson("/api/jobs/" + continuation.id + "/result", {
+status: "needs_human",
+lastError: "stale worker result",
+workerLog: "",
+finalAnswer: "",
+executionResult: "",
+verificationResult: "",
+workerId: "old-worker",
+sessionId: "old-session",
+pid: 999999
+});
+assert.equal(staleResult.stage, "sending_to_chatgpt", "stale result must not finish the active worker");
 const continuationFailed = await postJson("/api/jobs/" + continuation.id + "/result", {
 status: "failed", lastError: "CONTINUATION_FAILURE", workerLog: "",
 finalAnswer: "", executionResult: "", verificationResult: ""
 });
 assert.equal(continuationFailed.autoHandoffStatus, "自動再引き継ぎ上限に到達");
 assert.equal(continuationFailed.continuationJobId, "");
+
+const cascadeRoot = await createJob("Cascade stop test " + token);
+assert.equal((await claim()).id, cascadeRoot.id);
+const cascadeFailed = await postJson("/api/jobs/" + cascadeRoot.id + "/result", {
+status: "failed", lastError: "CASCADE_FAILURE", workerLog: "",
+finalAnswer: "", executionResult: "", verificationResult: ""
+});
+const cascadeChild = await requestJson("/api/jobs/" + cascadeFailed.continuationJobId, { method: "GET" });
+assert.equal(cascadeChild.stage, "queued");
+const cascadeStopped = await postJson("/api/jobs/" + cascadeRoot.id + "/stop", {
+reason: "stop the full continuation chain"
+});
+assert.equal(cascadeStopped.stage, "stopped");
+const cascadeChildStopped = await requestJson("/api/jobs/" + cascadeChild.id, { method: "GET" });
+assert.equal(cascadeChildStopped.stage, "stopped", "stopping a parent must stop queued continuations");
 
 const stoppedCreated = await createJob("Stopped display test " + token);
 assert.equal((await claim()).id, stoppedCreated.id);
@@ -256,7 +293,9 @@ assert.ok(failedCard.includes("data-recover-job"));
 assert.ok(failedCard.includes("継続ジョブへ"));
 assert.ok(continuationCard.includes("元ジョブへ"));
 assert.ok(page.includes('<script src="/client.js"></script>'));
+assert.ok(page.includes('id="queue-summary"'));
 assert.ok(clientScript.includes("fetch('/api/jobs'"));
+assert.ok(clientScript.includes('function updateQueueSummary'));
 assert.ok(clientScript.includes("var detailStates = new Map()"));
 assert.ok(clientScript.includes("button[data-job-action]"));
 assert.ok(clientScript.includes("button[data-recover-job]"));
@@ -310,7 +349,7 @@ assert.ok(handoff.includes("最終回答テスト"));
 assert.ok(handoff.includes("===RUN: node --check app.js==="));
 
 const listed = await requestJson("/api/jobs", { method: "GET" });
-assert.equal(listed.jobs.length, 6);
+assert.equal(listed.jobs.length, 8);
 assert.equal(listed.jobs.find(function(job) { return job.id === testOnly.id; }).kind, "test");
 console.log("REQUEST_CONSOLE_ISOLATED_REGRESSION_OK " + token);
 }
