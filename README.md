@@ -45,6 +45,39 @@ npm run check
 python3 -m py_compile dispatcher/dispatcher.py scripts/chatgpt-compose.py scripts/chatgpt-compose-bridge.py
 ```
 
+## Request-Console Self-Update
+
+`request-console` 自身は sandbox ではなく Ubuntu 実ホストの Git worktree で処理し、成功後に GitHub main、Ubuntu通常workspace、本番反映を同じcommitへ揃える運用を前提にします。
+
+実運用の `request-console` 例:
+
+```json
+{
+  "executionMode": "local",
+  "workspace": "/home/ubuntu/chatgpt-projects/request-console",
+  "deployCommand": "/usr/local/libexec/pseudo-codex-deploy-request-console",
+  "verifyCommand": "/usr/local/lib/pseudo-codex-console-deploy/verify-live.js",
+  "git": {
+    "enabled": true,
+    "repository": "owner/pseudo-codex-console",
+    "remote": "origin",
+    "baseBranch": "main",
+    "branchPrefix": "request-console",
+    "push": true
+  }
+}
+```
+
+一度だけ必要な bootstrap:
+
+- `/usr/local/libexec/pseudo-codex-deploy-request-console` を `deploy/deploy-request-console` へ向ける
+- `/usr/local/bin/chatgpt-browser-agent` を `scripts/chatgpt-browser-agent` へ向ける
+- `/usr/local/lib/pseudo-codex-console-deploy/check.js` を `check.js` へ向ける
+- `/usr/local/lib/pseudo-codex-console-deploy/verify-live.js` を `deploy/verify-live.js` へ向ける
+- `ubuntu` に `pseudo-codex-console.service` の `restart` と `is-active` だけ passwordless sudo を許可する
+
+この bootstrap が済んでいれば、以後の self-update deploy は root 配下へ新しいファイルを毎回コピーする必要がなく、workspace を `pull --ff-only` した内容をそのまま検証・反映できます。
+
 ## GitHub連携
 
 GitHub直接編集ではChatGPTが専用ブランチとPRを作成します。Ubuntu dispatcherはそのブランチを取得して検証し、成功時だけGitHub main、Ubuntu通常workspace、本番を同じcommitへ揃えます。

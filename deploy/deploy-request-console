@@ -2,49 +2,186 @@
 set -Eeuo pipefail
 
 project=${PSEUDO_CODEX_JOB_WORKSPACE:-/home/ubuntu/chatgpt-projects/request-console}
-source_app="$project/app.js"
-production_app=/opt/pseudo-codex-console/app.js
+console_app=/opt/pseudo-codex-console/app.js
 validator_root=/usr/local/lib/pseudo-codex-console-deploy
+dispatcher_runtime=/home/ubuntu/.local/lib/pseudo-codex/dispatcher.py
+agent_runtime_root=/home/ubuntu/chatgpt-browser-agent
+agent_wrapper=/usr/local/bin/chatgpt-browser-agent
 state_root=/home/ubuntu/.local/state/pseudo-codex
 timestamp=$(date +%Y%m%d-%H%M%S)
-backup_app="${production_app}.before-auto-${timestamp}"
-staged_app="${production_app}.auto-${timestamp}"
-deployed=0
+backup_root="$state_root/deploy-request-console-$timestamp"
+manifest_path="$backup_root/manifest.tsv"
+revision_path="$state_root/request-console.deployed-revision"
 
-mkdir -p "$state_root"
+declare -a writable_specs=(
+  "$project/app.js|$console_app|0644|console"
+  "$project/dispatcher/dispatcher.py|$dispatcher_runtime|0644|dispatcher"
+  "$project/agent/agent.js|$agent_runtime_root/agent.js|0644|agent"
+  "$project/agent/chatgpt.js|$agent_runtime_root/chatgpt.js|0644|agent"
+)
+
+declare -a required_mirrors=(
+  "$project/deploy/deploy-request-console|/usr/local/libexec/pseudo-codex-deploy-request-console"
+  "$project/scripts/chatgpt-browser-agent|$agent_wrapper"
+  "$project/check.js|$validator_root/check.js"
+  "$project/deploy/verify-live.js|$validator_root/verify-live.js"
+)
+
+console_changed=0
+dispatcher_changed=0
+agent_changed=0
+copied_count=0
+dispatcher_restart_scheduled=0
+app_deployed=0
+
+mkdir -p "$state_root" "$backup_root"
+touch "$manifest_path"
 exec 9>"$state_root/deploy-request-console.lock"
 if ! flock -n 9; then
   printf '%s\n' 'AUTO_DEPLOY_FAILED another deployment is already running'
   exit 75
 fi
 
+current_revision=$(git -C "$project" rev-parse HEAD 2>/dev/null || printf 'workspace-no-git')
+deployed_revision=$(cat "$revision_path" 2>/dev/null || true)
+
+ensure_parent_dir() {
+  install -d -- "$(dirname -- "$1")"
+}
+
+compare_files() {
+  local src=$1
+  local dest=$2
+  [[ -e "$dest" ]] || return 1
+  cmp -s -- "$src" "$dest"
+}
+
+backup_target() {
+  local dest=$1
+  local backup="$backup_root${dest}"
+  ensure_parent_dir "$backup"
+  if [[ -e "$dest" || -L "$dest" ]]; then
+    cp -a --no-dereference -- "$dest" "$backup"
+    printf '%s\t%s\t%s\n' "$dest" "$backup" restore >> "$manifest_path"
+  else
+    printf '%s\t%s\t%s\n' "$dest" "$backup" delete >> "$manifest_path"
+  fi
+}
+
+install_target() {
+  local src=$1
+  local dest=$2
+  local mode=$3
+  ensure_parent_dir "$dest"
+  install -m "$mode" -- "$src" "$dest"
+}
+
+restore_targets() {
+  [[ -s "$manifest_path" ]] || return 0
+  while IFS=$'\t' read -r dest backup action; do
+    if [[ "$action" == "restore" ]]; then
+      ensure_parent_dir "$dest"
+      cp -a --no-dereference -- "$backup" "$dest"
+    else
+      rm -f -- "$dest"
+    fi
+  done < <(tac "$manifest_path")
+}
+
+schedule_dispatcher_restart() {
+  if ((dispatcher_restart_scheduled)); then
+    return 0
+  fi
+  nohup bash -lc 'sleep 2; systemctl --user restart pseudo-codex-dispatcher.service' >/dev/null 2>&1 &
+  dispatcher_restart_scheduled=1
+}
+
 rollback() {
   status=$?
-  if ((deployed)) && [[ -f "$backup_app" ]]; then
-    cp --preserve=mode,timestamps -- "$backup_app" "$production_app"
-    sudo -n /usr/bin/systemctl restart pseudo-codex-console.service || true
+  trap - ERR
+  restore_targets || true
+  if ((agent_changed)); then
+    systemctl --user restart chatgpt-browser-agent.service >/dev/null 2>&1 || true
   fi
-  rm -f -- "$staged_app"
-  printf '%s\n' "AUTO_DEPLOY_ROLLED_BACK status=$status backup=$backup_app"
+  if ((console_changed)); then
+    sudo -n /usr/bin/systemctl restart pseudo-codex-console.service >/dev/null 2>&1 || true
+  fi
+  if ((dispatcher_changed)); then
+    schedule_dispatcher_restart || true
+  fi
+  printf '%s\n' "AUTO_DEPLOY_ROLLED_BACK status=$status backup=$backup_root"
   exit "$status"
 }
 trap rollback ERR
 
-source_hash=$(sha256sum "$source_app" | awk '{print $1}')
-production_hash=$(sha256sum "$production_app" | awk '{print $1}')
-if [[ "$source_hash" == "$production_hash" ]]; then
+if ! sudo -n /usr/bin/systemctl is-active pseudo-codex-console.service >/dev/null 2>&1; then
+  printf '%s\n' 'AUTO_DEPLOY_FAILED missing passwordless sudo for pseudo-codex-console.service'
+  exit 2
+fi
+
+for spec in "${required_mirrors[@]}"; do
+  IFS='|' read -r src dest <<<"$spec"
+  [[ -f "$src" ]] || {
+    printf '%s\n' "AUTO_DEPLOY_FAILED missing source: $src"
+    exit 2
+  }
+  compare_files "$src" "$dest" || {
+    printf '%s\n' "AUTO_DEPLOY_FAILED bootstrap mismatch: $dest"
+    exit 2
+  }
+done
+
+for spec in "${writable_specs[@]}"; do
+  IFS='|' read -r src _dest _mode _group <<<"$spec"
+  [[ -f "$src" ]] || {
+    printf '%s\n' "AUTO_DEPLOY_FAILED missing source: $src"
+    exit 2
+  }
+done
+
+node --check "$project/app.js"
+node --check "$project/check.js"
+node --check "$project/deploy/verify-live.js"
+python3 -m py_compile "$project/dispatcher/dispatcher.py"
+bash -n "$project/scripts/chatgpt-browser-agent"
+node --check "$project/agent/agent.js"
+node --check "$project/agent/chatgpt.js"
+APP_PATH="$project/app.js" node "$project/check.js"
+
+for spec in "${writable_specs[@]}"; do
+  IFS='|' read -r src dest mode group <<<"$spec"
+  if compare_files "$src" "$dest"; then
+    continue
+  fi
+  backup_target "$dest"
+  install_target "$src" "$dest" "$mode"
+  copied_count=$((copied_count + 1))
+  case "$group" in
+    console) console_changed=1; app_deployed=1 ;;
+    dispatcher) dispatcher_changed=1 ;;
+    agent) agent_changed=1 ;;
+  esac
+done
+
+if ((copied_count == 0)) && [[ "$current_revision" == "$deployed_revision" ]]; then
+  trap - ERR
   printf '%s\n' 'AUTO_DEPLOY_NO_CHANGES'
   exit 0
 fi
 
-node --check "$source_app"
-APP_PATH="$source_app" node "$validator_root/check.js"
+if ((agent_changed)); then
+  systemctl --user restart chatgpt-browser-agent.service
+  systemctl --user is-active chatgpt-browser-agent.service >/dev/null
+fi
 
-cp --preserve=mode,timestamps -- "$production_app" "$backup_app"
-install -m 0644 -- "$source_app" "$staged_app"
-mv -- "$staged_app" "$production_app"
-deployed=1
-sudo -n /usr/bin/systemctl restart pseudo-codex-console.service
+if ((dispatcher_changed)); then
+  schedule_dispatcher_restart
+fi
+
+if ((console_changed)); then
+  sudo -n /usr/bin/systemctl restart pseudo-codex-console.service
+fi
+sudo -n /usr/bin/systemctl is-active pseudo-codex-console.service >/dev/null
 
 python3 - <<'PY'
 import json
@@ -64,7 +201,13 @@ else:
 PY
 
 node "$validator_root/verify-live.js"
-production_hash=$(sha256sum "$production_app" | awk '{print $1}')
-test "$source_hash" = "$production_hash"
+
+for spec in "${writable_specs[@]}"; do
+  IFS='|' read -r src dest _mode _group <<<"$spec"
+  compare_files "$src" "$dest"
+done
+
+printf '%s\n' "$current_revision" > "$revision_path"
+
 trap - ERR
-printf '%s\n' "AUTO_DEPLOY_OK backup=$backup_app"
+printf '%s\n' "AUTO_DEPLOY_OK copied=$copied_count revision=$current_revision dispatcher_restart=$dispatcher_restart_scheduled app_deployed=$app_deployed"

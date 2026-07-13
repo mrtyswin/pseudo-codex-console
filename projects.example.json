@@ -1,6 +1,6 @@
 {
   "request-console": {
-    "executionMode": "github_direct",
+    "executionMode": "local",
     "workspace": "/path/to/request-console",
     "productionRoot": "/path/to/production-root",
     "deployCommand": "/path/to/deploy-command",
