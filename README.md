@@ -47,13 +47,13 @@ python3 -m py_compile dispatcher/dispatcher.py scripts/chatgpt-compose.py script
 
 ## Request-Console Self-Update
 
-`request-console` 自身は sandbox ではなく Ubuntu 実ホストの Git worktree で処理し、成功後に GitHub main、Ubuntu通常workspace、本番反映を同じcommitへ揃える運用を前提にします。
+`request-console` 自身の改修は Ubuntu 上の Codex CLI だけで行います。Codex CLI は専用 branch と pull request を作成し、GitHub `main` への merge 後、Ubuntu `main` は `pull --ff-only` とテストと deploy だけを担当します。request-console のブラウザ queue から自己改修は行いません。
 
 実運用の `request-console` 例:
 
 ```json
 {
-  "executionMode": "local",
+  "executionMode": "verify_only",
   "workspace": "/home/ubuntu/chatgpt-projects/request-console",
   "deployCommand": "/usr/local/libexec/pseudo-codex-deploy-request-console",
   "verifyCommand": "/usr/local/lib/pseudo-codex-console-deploy/verify-live.js",
@@ -76,7 +76,7 @@ python3 -m py_compile dispatcher/dispatcher.py scripts/chatgpt-compose.py script
 - `/usr/local/lib/pseudo-codex-console-deploy/verify-live.js` を `deploy/verify-live.js` へ向ける
 - `ubuntu` に `pseudo-codex-console.service` の `restart` と `is-active` だけ passwordless sudo を許可する
 
-この bootstrap が済んでいれば、以後の self-update deploy は root 配下へ新しいファイルを毎回コピーする必要がなく、workspace を `pull --ff-only` した内容をそのまま検証・反映できます。
+この bootstrap が済んでいれば、以後は pull request の merge 後に `scripts/deploy-request-console-main` を実行します。このコマンドは Ubuntu workspace が clean な `main` で `origin/main` と同一であることを確認し、全テスト後に本番へ反映します。
 
 ## GitHub連携
 

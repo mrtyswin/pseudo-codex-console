@@ -18,6 +18,7 @@ const STARTED_AT = new Date().toISOString();
 const DEFAULT_PROJECT = "request-console";
 const PROJECT_PATTERN = /^[a-z0-9][a-z0-9-]{0,63}$/;
 const GITHUB_FIRST_PROJECTS = new Set(["request-console"]);
+const CODEX_CLI_ONLY_PROJECTS = new Set(["request-console"]);
 const WORKER_LOG_LIMIT = Number.parseInt(
 process.env.WORKER_LOG_LIMIT || "12000",
 10
@@ -1990,6 +1991,7 @@ healthUrl: typeof config.healthUrl === "string" ? config.healthUrl : "",
 deploymentOwner: typeof config.deploymentOwner === "string" ? config.deploymentOwner : "",
 requiresDeployment: config.requiresDeployment === true,
 githubFirst: GITHUB_FIRST_PROJECTS.has(name),
+codexCliOnly: CODEX_CLI_ONLY_PROJECTS.has(name),
 git
 };
 }
@@ -3188,8 +3190,8 @@ const gitMode = summary.git.enabled
 const deployMode = summary.requiresDeployment
 ? (summary.deployCommand ? "ホスト反映あり" : "要反映だが deployCommand 未設定")
 : "反映不要";
-const note = name === DEFAULT_PROJECT
-? '<div class="project-note"><strong>固定ルール:</strong> このプロジェクトは GitHub main から pull --ff-only した内容だけを deploy します。サンドボックス変更物をそのまま本番へ反映しません。</div>'
+const note = summary.codexCliOnly
+? '<div class="project-note"><strong>固定ルール:</strong> 自己改修は Ubuntu の Codex CLI で専用 branch / PR を作成します。Ubuntu main は GitHub main を pull --ff-only し、同一 commit だけを deploy します。このコンソールのブラウザ agent は自己改修に使用しません。</div>'
 : "";
 return [
 '<article class="project-card">',

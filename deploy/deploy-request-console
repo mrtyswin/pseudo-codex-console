@@ -2,6 +2,7 @@
 set -Eeuo pipefail
 
 project=${PSEUDO_CODEX_JOB_WORKSPACE:-/home/ubuntu/chatgpt-projects/request-console}
+canonical_project=/home/ubuntu/chatgpt-projects/request-console
 console_app=/opt/pseudo-codex-console/app.js
 validator_root=/usr/local/lib/pseudo-codex-console-deploy
 dispatcher_runtime=/home/ubuntu/.local/lib/pseudo-codex/dispatcher.py
@@ -33,6 +34,28 @@ agent_changed=0
 copied_count=0
 dispatcher_restart_scheduled=0
 app_deployed=0
+
+resolved_project=$(realpath -- "$project")
+resolved_canonical=$(realpath -- "$canonical_project")
+if [[ "$resolved_project" != "$resolved_canonical" ]]; then
+  printf '%s\n' "AUTO_DEPLOY_FAILED request-console deploy source must be canonical Ubuntu workspace: $resolved_canonical"
+  exit 2
+fi
+branch=$(git -C "$project" symbolic-ref --quiet --short HEAD 2>/dev/null || true)
+if [[ "$branch" != main ]]; then
+  printf '%s\n' "AUTO_DEPLOY_FAILED request-console deploy source must be main, actual=${branch:-detached}"
+  exit 2
+fi
+if [[ -n $(git -C "$project" status --porcelain=v1 --untracked-files=all) ]]; then
+  printf '%s\n' 'AUTO_DEPLOY_FAILED request-console main workspace is dirty'
+  exit 2
+fi
+local_revision=$(git -C "$project" rev-parse HEAD)
+remote_revision=$(git -C "$project" rev-parse refs/remotes/origin/main 2>/dev/null || true)
+if [[ -z "$remote_revision" || "$local_revision" != "$remote_revision" ]]; then
+  printf '%s\n' "AUTO_DEPLOY_FAILED request-console main must equal origin/main local=$local_revision remote=${remote_revision:-missing}"
+  exit 2
+fi
 
 mkdir -p "$state_root" "$backup_root"
 touch "$manifest_path"

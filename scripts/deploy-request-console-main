@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+project=/home/ubuntu/chatgpt-projects/request-console
+remote=origin
+branch=main
+
+cd "$project"
+
+if [[ $(git symbolic-ref --quiet --short HEAD 2>/dev/null || true) != "$branch" ]]; then
+  printf '%s\n' 'RELEASE_FAILED Ubuntu workspace must be on main'
+  exit 2
+fi
+if [[ -n $(git status --porcelain=v1 --untracked-files=all) ]]; then
+  printf '%s\n' 'RELEASE_FAILED Ubuntu main workspace is dirty'
+  exit 2
+fi
+
+git fetch --prune "$remote" "$branch"
+git pull --ff-only "$remote" "$branch"
+
+local_revision=$(git rev-parse HEAD)
+remote_revision=$(git rev-parse "$remote/$branch")
+if [[ "$local_revision" != "$remote_revision" ]]; then
+  printf '%s\n' "RELEASE_FAILED local and GitHub main differ local=$local_revision remote=$remote_revision"
+  exit 2
+fi
+
+npm run check
+npm run check:syntax
+/usr/local/libexec/pseudo-codex-deploy-request-console
+curl -fsS http://127.0.0.1:8090/health
+systemctl --user is-active pseudo-codex-dispatcher.service
+
+printf '%s\n' "REQUEST_CONSOLE_RELEASE_OK revision=$local_revision"

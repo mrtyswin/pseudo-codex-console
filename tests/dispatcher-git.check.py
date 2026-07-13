@@ -30,7 +30,7 @@ def main() -> None:
     root = Path(tempfile.mkdtemp(prefix="pseudo-codex-dispatcher-git-"))
     try:
         projects = root / "projects"
-        source = projects / "request-console"
+        source = projects / "fixture-project"
         remote = root / "remote.git"
         state = root / "state"
         source.mkdir(parents=True)
@@ -46,7 +46,7 @@ def main() -> None:
 
         config_path = root / "projects.json"
         config_path.write_text(json.dumps({
-            "request-console": {
+            "fixture-project": {
                 "workspace": str(source),
                 "requiresDeployment": False,
                 "git": {
@@ -76,7 +76,7 @@ def main() -> None:
 
         job = {
             "id": "11111111-2222-4333-8444-555555555555",
-            "project": "request-console",
+            "project": "fixture-project",
             "title": "Git publishing check",
         }
         workspace, context = dispatcher.prepare_job_workspace(job, source.resolve())
@@ -112,7 +112,7 @@ def main() -> None:
 
         dirty_job = {
             "id": "22222222-3333-4444-8555-666666666666",
-            "project": "request-console",
+            "project": "fixture-project",
             "title": "Dirty workspace safety check",
         }
         dirty_workspace, dirty_context = dispatcher.prepare_job_workspace(dirty_job, source.resolve())

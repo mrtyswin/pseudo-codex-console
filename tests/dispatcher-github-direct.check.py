@@ -28,7 +28,7 @@ def main() -> None:
     root = Path(tempfile.mkdtemp(prefix="pseudo-codex-github-direct-"))
     try:
         projects = root / "projects"
-        source = projects / "request-console"
+        source = projects / "fixture-project"
         author = root / "author"
         remote = root / "remote.git"
         state = root / "state"
@@ -55,7 +55,7 @@ def main() -> None:
 
         config_path = root / "projects.json"
         config = {
-            "request-console": {
+            "fixture-project": {
                 "workspace": str(source),
                 "requiresDeployment": False,
                 "executionMode": "github_direct",
@@ -83,8 +83,8 @@ def main() -> None:
         dispatcher = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(dispatcher)
 
-        job = {"id": "direct-check", "project": "request-console", "title": "direct"}
-        cwd, context = dispatcher.prepare_job_workspace(job, source.resolve(), config["request-console"])
+        job = {"id": "direct-check", "project": "fixture-project", "title": "direct"}
+        cwd, context = dispatcher.prepare_job_workspace(job, source.resolve(), config["fixture-project"])
         assert cwd == source.resolve()
         assert context and context["mode"] == "github_direct"
         output = "\n".join([
@@ -101,7 +101,7 @@ def main() -> None:
             "===END_GITHUB_COMPLETE===",
         ])
         ok, detail = dispatcher.publish_github_direct_changes(
-            job, context, output, config["request-console"]
+            job, context, output, config["fixture-project"]
         )
         if not ok:
             raise AssertionError(detail)

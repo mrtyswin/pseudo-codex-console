@@ -12,6 +12,7 @@ assert.match(source, /<summary>プロジェクトを追加・更新<\/summary>/)
 assert.match(source, /class="settings-content"/);
 assert.match(source, /ChatGPTとのやり取り/);
 assert.match(source, /name="executionMode"/);
+assert.match(source, /Codex CLI.*専用 branch \/ PR/);
 assert.match(source, /name="gitRepository"/);
 assert.match(source, /Ubuntuホスト直接実行/);
 assert.doesNotMatch(source, /sandboxWorkspace|Sandbox Workspace|\/mnt\/workspace/);

@@ -54,12 +54,23 @@ with tempfile.TemporaryDirectory() as temporary:
     launcher.chmod(0o755)
     assert module.verify_agent_launcher() == launcher.resolve()
 
-    task = module.task_for(
-        {"id": "host-native", "project": "request-console", "title": "ssh", "instruction": "ssh今とじてるん？"},
-        config["request-console"],
-    )
-    assert "directly on the Ubuntu host" in task
-    assert "available sandbox tools" not in task
+    try:
+        module.prepare_job_workspace(
+            {"id": "host-native", "project": "request-console"},
+            resolved,
+            config["request-console"],
+        )
+    except RuntimeError as exc:
+        assert "REQUEST_CONSOLE_CODEX_CLI_ONLY" in str(exc)
+    else:
+        raise AssertionError("request-console self-maintenance was accepted by the browser dispatcher")
+
+    verify_config = dict(config["request-console"], executionMode="verify_only")
+    assert module.prepare_job_workspace(
+        {"id": "verify-only", "project": "request-console"},
+        resolved,
+        verify_config,
+    ) == (resolved, None)
 
     source = dispatcher_path.read_text(encoding="utf-8")
     assert '"--host-native"' in source
