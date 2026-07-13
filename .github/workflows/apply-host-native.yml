@@ -26,9 +26,23 @@ jobs:
             echo "applied=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          python3 .pseudo-codex/preflight-host-native.py
-          python3 .pseudo-codex/apply-host-native.py
-          rm -f .pseudo-codex/apply-host-native.py .pseudo-codex/preflight-host-native.py .github/workflows/apply-host-native.yml
+          set +e
+          {
+            python3 .pseudo-codex/preflight-host-native.py
+            python3 .pseudo-codex/apply-host-native.py
+          } > .pseudo-codex/host-native.error 2>&1
+          status=$?
+          set -e
+          if [ "$status" -ne 0 ]; then
+            cat .pseudo-codex/host-native.error
+            git config user.name "Pseudo Codex GitHub Direct"
+            git config user.email "pseudo-codex@example.invalid"
+            git add .pseudo-codex/host-native.error
+            git commit -m "Record host-native migration failure"
+            git push origin HEAD:feature/host-native-execution
+            exit "$status"
+          fi
+          rm -f .pseudo-codex/host-native.error .pseudo-codex/apply-host-native.py .pseudo-codex/preflight-host-native.py .github/workflows/apply-host-native.yml
           echo "applied=true" >> "$GITHUB_OUTPUT"
       - name: Verify syntax and regressions
         if: steps.apply.outputs.applied == 'true'
