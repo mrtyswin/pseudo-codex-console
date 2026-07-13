@@ -1,0 +1,51 @@
+name: apply-host-native-execution
+
+on:
+  push:
+    branches:
+      - feature/host-native-execution
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feature/host-native-execution
+          fetch-depth: 0
+      - name: Apply host-native migration
+        id: apply
+        run: |
+          if [ ! -f .pseudo-codex/apply-host-native.py ]; then
+            echo "applied=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          python3 .pseudo-codex/apply-host-native.py
+          rm -f .pseudo-codex/apply-host-native.py .github/workflows/apply-host-native.yml
+          echo "applied=true" >> "$GITHUB_OUTPUT"
+      - name: Verify syntax and regressions
+        if: steps.apply.outputs.applied == 'true'
+        run: |
+          npm run check:syntax
+          npm run check
+          python3 -m py_compile dispatcher/dispatcher.py scripts/chatgpt-compose.py scripts/chatgpt-compose-bridge.py
+          python3 tests/dispatcher-git.check.py
+          python3 tests/dispatcher-github-direct.check.py
+          python3 tests/dispatcher-config-reload.check.py
+          python3 tests/dispatcher-host-native.check.py
+          python3 tests/dispatcher-parallel.check.py
+          if git grep -nE 'sandboxWorkspace|/mnt/workspace|sandboxed ChatGPT|inside a sandbox|from the sandbox|サンドボックス' -- ':!docs/archive/**'; then
+            echo 'Sandbox runtime references remain.' >&2
+            exit 1
+          fi
+      - name: Commit host-native implementation
+        if: steps.apply.outputs.applied == 'true'
+        run: |
+          git config user.name "Pseudo Codex GitHub Direct"
+          git config user.email "pseudo-codex@example.invalid"
+          git add -A
+          git commit -m "Run console jobs directly on the Ubuntu host"
+          git push origin HEAD:feature/host-native-execution
