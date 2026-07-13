@@ -347,6 +347,9 @@ async function detectUsageLimit(page) {
       /try again later/i,
       /reset(?:s)? at/i,
       /upgrade to continue/i,
+      /too many requests/i,
+      /temporarily limited access/i,
+      /wait a few minutes/i,
       /利用上限/,
       /制限に達し/,
     ];
@@ -357,15 +360,26 @@ async function detectUsageLimit(page) {
   }).catch(() => '');
 }
 
+async function throwIfUsageLimited(page, log) {
+  const usageLimit = await detectUsageLimit(page);
+  if (!usageLimit) return;
+  await page.evaluate(() => {
+    const dialog = document.querySelector('[role="dialog"]');
+    const button = dialog && [...dialog.querySelectorAll('button')].find(item =>
+      /^(got it|ok|閉じる|了解)$/i.test((item.textContent || '').trim())
+    );
+    if (button) button.click();
+  }).catch(() => {});
+  log(`Model usage/request limit detected: ${usageLimit.slice(0, 300)}`);
+  throw new Error(`MODEL_USAGE_LIMIT: ${usageLimit}`);
+}
+
 async function waitWithRecovery(page, fullPrompt, log, beforeState, interact) {
   try {
     await waitForStreamingDone(page, log, beforeState, RESPONSE_TIMEOUT);
     return;
   } catch (initialError) {
-    const usageLimit = await detectUsageLimit(page);
-    if (usageLimit) {
-      throw new Error(`MODEL_USAGE_LIMIT: ${usageLimit}`);
-    }
+    await throwIfUsageLimited(page, log);
     log(`No completed response after ${RESPONSE_TIMEOUT}ms; reloading the ChatGPT page once.`);
     await interact(async () => {
       await page.reload({ waitUntil: 'domcontentloaded', timeout: 30_000 });
@@ -373,10 +387,7 @@ async function waitWithRecovery(page, fullPrompt, log, beforeState, interact) {
       await new Promise(resolve => setTimeout(resolve, 3_000));
     });
 
-    const reloadedUsageLimit = await detectUsageLimit(page);
-    if (reloadedUsageLimit) {
-      throw new Error(`MODEL_USAGE_LIMIT: ${reloadedUsageLimit}`);
-    }
+    await throwIfUsageLimited(page, log);
 
     if (await pageIsStreaming(page)) {
       log('Generation is still active after reload; waiting without duplicate submission.');
@@ -601,6 +612,7 @@ async function startDaemonProcess() {
                 : adapterResult;
             } else {
               const beforeState = await withBrowserInteraction(page, async () => {
+                await throwIfUsageLimited(page, log);
                 if (uploadPath) await uploadFileToChatGPT(page, uploadPath, log);
                 if (uploadPath) {
                   log('Waiting for send button to become enabled (file upload in progress)...');

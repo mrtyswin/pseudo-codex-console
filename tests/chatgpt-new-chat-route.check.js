@@ -21,5 +21,9 @@ assert.match(source, /keyboard\.up\(['"]Control['"]\)/);
 assert.doesNotMatch(source, /keyboard\.press\(['"]Control\+A['"]\)/);
 assert.match(source, /CHATGPT_PROMPT_INPUT_FAILED composer remained empty or incomplete/);
 assert.doesNotMatch(source, /execCommand\(['"]insertText['"]/);
+assert.match(source, /too many requests/i);
+assert.match(source, /temporarily limited access/i);
+assert.match(source, /wait a few minutes/i);
+assert.match(source, /await throwIfUsageLimited\(page, log\)/);
 
 console.log("CHATGPT_NEW_CHAT_ROUTE_OK");
