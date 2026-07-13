@@ -1,7 +1,0 @@
-scripts/chatgpt-browser-agent:25:   chatgpt-browser-agent run-host [agent.js options] "task"  # compatibility alias
-scripts/chatgpt-browser-agent:44:   run|run-host)
-dispatcher/dispatcher.py:28: AGENT = os.environ.get("PSEUDO_CODEX_AGENT", "/usr/local/bin/chatgpt-browser-agent")
-systemd/pseudo-codex-dispatcher.service.example:10: Environment=PSEUDO_CODEX_AGENT=/usr/local/bin/chatgpt-browser-agent
-tests/agent-host-native.check.js:29: assert.match(launcher, /run\|run-host\)[\s\S]*exec node "\$repo\/agent\.js"/);
-tests/agent-host-native.check.js:30: assert.doesNotMatch(launcher, /libexec\/chatgpt-browser-agent-sandbox|\bbwrap\b|--unshare-all/);
-tests/agent-host-native.check.js:32:   fs.existsSync(path.join(root, "scripts", "chatgpt-browser-agent-sandbox")),
