@@ -1,6 +1,4 @@
-scripts/chatgpt-browser-agent-sandbox:70:     echo "Use run-host only when host-level access is intentional." >&2
-scripts/chatgpt-browser-agent:25:   chatgpt-browser-agent run-host [agent.js options] "task"  # unsandboxed escape hatch
-scripts/chatgpt-browser-agent:45:     exec /usr/local/libexec/chatgpt-browser-agent-sandbox "$@"
-scripts/chatgpt-browser-agent:47:   run-host)
+scripts/chatgpt-browser-agent:25:   chatgpt-browser-agent run-host [agent.js options] "task"  # compatibility alias
+scripts/chatgpt-browser-agent:44:   run|run-host)
 dispatcher/dispatcher.py:28: AGENT = os.environ.get("PSEUDO_CODEX_AGENT", "/usr/local/bin/chatgpt-browser-agent")
 systemd/pseudo-codex-dispatcher.service.example:10: Environment=PSEUDO_CODEX_AGENT=/usr/local/bin/chatgpt-browser-agent
