@@ -1,16 +1,24 @@
 # Pseudo Codex Console
 
-ブラウザ版ChatGPTを修正案生成担当、Ubuntuをファイル操作・テスト・Git反映担当として使うローカル開発キューです。OpenAI APIキーは使用しません。
+ブラウザ版ChatGPTを判断・実装担当、Ubuntuホストをコマンド実行・検証・Git同期・本番反映担当として使う開発キューです。OpenAI APIキーは使用しません。
 
 ## 構成
 
 - `app.js`: ジョブ登録・進捗・結果表示を行うWeb GUI/API
-- `agent/`: ChatGPTブラウザとの送受信と、サンドボックス内の編集ループ
-- `dispatcher/`: ジョブ取得、agent起動、本番反映、結果保存
-- `scripts/`: サンドボックスと限定Docker Composeブリッジ
+- `agent/`: ChatGPTブラウザとの送受信と、Ubuntuホスト上の編集・検証ループ
+- `dispatcher/`: ジョブ取得、ホストGit worktree作成、agent起動、Git公開、本番反映、結果保存
+- `scripts/`: Docker Composeなどのホスト補助処理
 - `deploy/`: Console本体の検証・反映例
 - `systemd/`: サービス定義の公開用テンプレート
-- `tests/`: GUIとagentの回帰チェック
+- `tests/`: GUI、agent、dispatcherの回帰チェック
+
+## 実行方式
+
+- `GitHub直接編集`: ChatGPTが専用ブランチとPRをGitHub上で作成し、Ubuntuが取得・検証・main同期・配備を行います。
+- `Ubuntuホスト直接実行`: Ubuntu実ホストのジョブ専用Git worktreeで調査・編集・検証します。隔離用ワークスペースへの置換は行いません。
+- `検証のみ`: Ubuntu実ホストで読み取り調査と検証だけを行い、ファイル変更・Git公開・配備を行いません。
+
+ホスト状態の質問では、`ss`、`systemctl status`、`ps`、`/proc`などをUbuntu実ホストで確認します。ファイル変更がないジョブではGit公開と本番配備を自動的にスキップします。
 
 ## 編集プロトコル
 
@@ -39,9 +47,9 @@ python3 -m py_compile dispatcher/dispatcher.py scripts/chatgpt-compose.py script
 
 ## GitHub連携
 
-ChatGPTはGitHub上のコードを読み、修正内容を生成します。Ubuntu側はジョブ専用ブランチで変更を適用し、テスト成功後だけpushします。GitHubのSSH鍵やトークンはUbuntuのGit credentialまたはSSH agentへ保存し、リポジトリやジョブ本文には書きません。
+GitHub直接編集ではChatGPTが専用ブランチとPRを作成します。Ubuntu dispatcherはそのブランチを取得して検証し、成功時だけGitHub main、Ubuntu通常workspace、本番を同じcommitへ揃えます。
 
-標準のChatGPT GitHub連携は読み取り用途です。GitHubへの書き込みはdispatcherを動かすUbuntuが担当します。
+GitHubのSSH鍵やトークンはUbuntuのGit credentialまたはSSH agentへ保存し、リポジトリ、ジョブ本文、会話ログには書きません。
 
 ## 公開しないデータ
 

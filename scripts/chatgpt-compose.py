@@ -20,7 +20,7 @@ def main() -> int:
     socket_path = os.environ.get("CHATGPT_COMPOSE_SOCKET")
     if not token or not socket_path:
         print(
-            "Docker Compose access is available only for sandboxed projects under "
+            "Docker Compose access is available only for configured host projects under "
             "/home/ubuntu/chatgpt-projects.",
             file=sys.stderr,
         )

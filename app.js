@@ -1966,7 +1966,6 @@ return {
 name,
 executionMode,
 workspace: typeof config.workspace === "string" ? config.workspace : "",
-sandboxWorkspace: typeof config.sandboxWorkspace === "string" ? config.sandboxWorkspace : "",
 productionRoot: typeof config.productionRoot === "string" ? config.productionRoot : "",
 deployCommand: typeof config.deployCommand === "string" ? config.deployCommand : "",
 verifyCommand: typeof config.verifyCommand === "string" ? config.verifyCommand : "",
@@ -2036,8 +2035,13 @@ turn.fileChanges.length
 ].join("");
 }).join("\n");
 const rawLog = readAllowedResultLog(job.workerLog) || readJobLogById(job.id);
-const hostContract = Object.keys(config).length
-? JSON.stringify(config, null, 2)
+const hostConfig = Object.fromEntries(
+Object.entries(config).filter(function(entry) {
+return entry[0] !== ["sandbox", "Workspace"].join("");
+})
+);
+const hostContract = Object.keys(hostConfig).length
+? JSON.stringify(hostConfig, null, 2)
 : "PROJECT CONFIGURATION IS MISSING";
 
 return redactSecrets([
@@ -2065,7 +2069,7 @@ return redactSecrets([
 hostContract,
 "```",
 "",
-"Important: ChatGPT operates only in the sandbox path `/mnt/workspace`. Host workspace and production paths are intentionally invisible there. ChatGPT must edit and test `/mnt/workspace`; after `===TASK_COMPLETE===`, the host dispatcher owns deployment and production verification using the contract above.",
+"Important: local and verification jobs run directly on the Ubuntu host in the configured workspace or a dedicated host Git worktree. The dispatcher owns Git publication, deployment, and production verification after `===TASK_COMPLETE===`.",
 "",
 "## Original request",
 job.instruction || "(empty)",
@@ -2103,7 +2107,7 @@ compactText(rawLog, 24000) || "(log unavailable)",
 "",
 "## Required continuation behavior",
 "1. Preserve successful file changes and verified facts.",
-"2. Do not repeat a failed command or inspect host-only deployment paths from the sandbox.",
+"2. Do not repeat a failed command; inspect Ubuntu host state directly with non-destructive commands when the request concerns the host.",
 "3. Choose a materially different strategy when the same failure recurs.",
 "4. Return the smallest executable next action, then verify it.",
 ""
@@ -2225,7 +2229,6 @@ const executionMode = ["github_direct", "local", "verify_only"].includes(request
 const config = {
 executionMode,
 workspace,
-sandboxWorkspace: String(value.sandboxWorkspace || "").trim(),
 productionRoot: String(value.productionRoot || "").trim(),
 deployCommand: String(value.deployCommand || "").trim(),
 verifyCommand: String(value.verifyCommand || "").trim(),
@@ -3101,7 +3104,7 @@ return names.map(function(name) {
 const summary = projectSummary(name, configs[name]);
 const executionMode = summary.executionMode === "github_direct"
 ? "GitHub直接編集"
-: summary.executionMode === "verify_only" ? "検証のみ" : "Ubuntuローカル編集";
+: summary.executionMode === "verify_only" ? "検証のみ" : "Ubuntuホスト直接実行";
 const gitMode = summary.git.enabled
 ? (summary.git.push ? "GitHub正本・push有効" : "Git管理あり・push無効")
 : "ローカル作業のみ";
@@ -3117,7 +3120,6 @@ return [
 summary.healthUrl ? '<a href="' + escapeHtml(summary.healthUrl) + '" target="_blank" rel="noopener">health</a>' : "",
 '</div>',
 '<div class="project-facts"><span>Workspace: <strong>', escapeHtml(summary.workspace || "(未設定)"), '</strong></span></div>',
-summary.sandboxWorkspace ? '<div class="project-facts"><span>Sandbox: <strong>' + escapeHtml(summary.sandboxWorkspace) + '</strong></span></div>' : "",
 '<div class="project-facts"><span>配備: <strong>', escapeHtml(deployMode), '</strong></span><span>Git: <strong>', escapeHtml(gitMode), '</strong></span></div>',
 '<div class="project-facts"><span>実行方式: <strong>', escapeHtml(executionMode), '</strong></span></div>',
 summary.productionRoot ? '<div class="project-facts"><span>Production Root: <strong>' + escapeHtml(summary.productionRoot) + '</strong></span></div>' : "",
@@ -3136,11 +3138,10 @@ return [
 '<div><label for="project-config-name">プロジェクト名</label><input id="project-config-name" name="name" maxlength="64" placeholder="wordpress-demo" required></div>',
 '<div><label for="project-config-mode">実行方式</label><select id="project-config-mode" name="executionMode">' +
 '<option value="github_direct">GitHub直接編集（推奨）</option>' +
-'<option value="local">Ubuntuローカル編集</option>' +
+'<option value="local">Ubuntuホスト直接実行</option>' +
 '<option value="verify_only">検証のみ</option>' +
 '</select></div>',
 '<div><label for="project-config-workspace">Workspace</label><input id="project-config-workspace" name="workspace" maxlength="500" placeholder="/home/ubuntu/chatgpt-projects/wordpress-demo" required></div>',
-'<div><label for="project-config-sandbox">Sandbox Workspace</label><input id="project-config-sandbox" name="sandboxWorkspace" maxlength="500" placeholder="/mnt/workspace"></div>',
 '<div><label for="project-config-health">Health URL</label><input id="project-config-health" name="healthUrl" maxlength="500" placeholder="http://127.0.0.1:8080/health"></div>',
 '<div><label for="project-config-production">Production Root</label><input id="project-config-production" name="productionRoot" maxlength="500" placeholder="/opt/pseudo-codex-console"></div>',
 '<div><label for="project-config-service">Service / Container</label><input id="project-config-service" name="service" maxlength="300" placeholder="pseudo-codex-console.service"></div>',
@@ -3151,7 +3152,7 @@ return [
 '<div class="checkbox-row"><label><input type="checkbox" name="requiresDeployment" value="true"> 本番反映が必要</label></div>',
 '<div class="project-git-box">',
 '<h3>GitHub / Git 運用</h3>',
-'<p class="helper">GitHub直接編集ではChatGPTが専用ブランチとPRをGitHub上で作成し、Ubuntuは検証・main同期・本番反映だけを担当します。</p>',
+'<p class="helper">GitHub直接編集ではChatGPTが専用ブランチとPRをGitHub上で作成します。Ubuntuホスト直接実行では、隔離用作業環境を使わず、実ホストの専用Git worktreeで調査・編集・検証します。</p>',
 '<div class="checkbox-row"><label><input type="checkbox" name="gitEnabled" value="true"> Git 管理を有効にする</label><label><input type="checkbox" name="gitPush" value="true"> 成功後に push する</label></div>',
 '<div class="project-config-grid">',
 '<div><label for="project-config-repository">GitHub Repository</label><input id="project-config-repository" name="gitRepository" maxlength="300" placeholder="owner/repository"></div>',
