@@ -26,13 +26,15 @@ try { calls = JSON.parse(fs.readFileSync(statePath, "utf8")).calls; } catch (_er
 calls += 1;
 fs.writeFileSync(statePath, JSON.stringify({ calls }));
 if (calls === 1) {
-  process.stdout.write("===EDIT: sample.js===\\n===OLD===\\nalpha\\n===NEW===\\nfirst\\n===ENDEDIT===");
+  process.stdout.write("===EDIT: sample.js===\\n===OLD===\\nalpha\\n===NEW===\\nalpha\\n===ENDEDIT===");
 } else if (calls === 2) {
-  process.stdout.write("===PATCH===\\n--- a/sample.js\\n+++ b/sample.js\\n@@ -1,2 +1,2 @@\\n first\\n-beta\\n+second\\n===ENDPATCH===");
+  process.stdout.write("===EDIT: sample.js===\\n===OLD===\\nalpha\\n===NEW===\\nfirst\\n===ENDEDIT===");
 } else if (calls === 3) {
-  process.stdout.write("===FILE: sample.js===\\nconst finalValue = true;\\n===ENDFILE===");
+  process.stdout.write("===PATCH===\\n--- a/sample.js\\n+++ b/sample.js\\n@@ -1,2 +1,2 @@\\n first\\n-beta\\n+second\\n===ENDPATCH===");
 } else if (calls === 4) {
-  process.stdout.write("===RUN: test -f sample.js && grep -q 'finalValue = true' sample.js===");
+  process.stdout.write("===FILE: sample.js===\\nconst finalValue = true;\\n===ENDFILE===");
+} else if (calls === 5) {
+  process.stdout.write("RUN\\ntest -f sample.js && grep -q 'finalValue = true' sample.js");
 } else {
   process.stdout.write("No-SHA editing verified.\\n===TASK_COMPLETE===");
 }
@@ -48,7 +50,7 @@ try {
       env: {
         ...process.env,
         PSEUDO_CODEX_CHATGPT_SCRIPT: fakeChatGpt,
-        PSEUDO_CODEX_MAX_TURNS: "10",
+        PSEUDO_CODEX_MAX_TURNS: "12",
         FAKE_STATE_FILE: stateFile
       }
     }
@@ -60,6 +62,7 @@ try {
     "const finalValue = true;\n"
   );
   assert.match(output, /Exact edit applied/);
+  assert.match(output, /NO_OP_EDIT_REFUSED/);
   assert.match(output, /Patch applied/);
   assert.match(output, /Replaced: sample\.js/);
   assert.match(output, /===TASK_COMPLETE===/);
