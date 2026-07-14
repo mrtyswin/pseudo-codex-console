@@ -56,6 +56,9 @@ WORKER_ID = os.environ.get("PSEUDO_CODEX_WORKER_ID", f"{socket.gethostname()}-{o
 # projects (and Git-isolated worktrees) to make progress concurrently.
 MAX_WORKERS = max(1, int(os.environ.get("PSEUDO_CODEX_MAX_WORKERS", "2")))
 GITHUB_FIRST_PROJECTS = {"request-console"}
+BROWSER_RESTART_LOCK = Path(
+    os.environ.get("PSEUDO_CODEX_BROWSER_RESTART_LOCK", str(STATE_DIR / "browser-restart.lock"))
+)
 
 
 def agent_marker(output: str, marker: str) -> dict[str, str] | None:
@@ -1288,16 +1291,19 @@ def run_job(job: dict[str, Any]) -> None:
 
 def claim_next_job(excluded_projects: set[str] | None = None) -> dict[str, Any] | None:
     session_id = uuid.uuid4().hex
-    status, job = api_json(
-        "POST",
-        "/api/jobs/claim",
-        {
-            "workerId": WORKER_ID,
-            "sessionId": session_id,
-            "leaseSeconds": LEASE_SECONDS,
-            "excludedProjects": sorted(excluded_projects or set()),
-        },
-    )
+    BROWSER_RESTART_LOCK.parent.mkdir(parents=True, exist_ok=True)
+    with BROWSER_RESTART_LOCK.open("a+", encoding="utf-8") as restart_lock:
+        fcntl.flock(restart_lock.fileno(), fcntl.LOCK_EX)
+        status, job = api_json(
+            "POST",
+            "/api/jobs/claim",
+            {
+                "workerId": WORKER_ID,
+                "sessionId": session_id,
+                "leaseSeconds": LEASE_SECONDS,
+                "excludedProjects": sorted(excluded_projects or set()),
+            },
+        )
     return None if status == 204 else job
 
 
