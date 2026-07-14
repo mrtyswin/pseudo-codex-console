@@ -185,6 +185,8 @@ for spec in "${writable_specs[@]}"; do
 done
 
 if ((agent_update_pending)); then
+  exec 8>"$state_root/browser-restart.lock"
+  flock 8
   python3 "$project/scripts/check-browser-restart-safe.py" \
     "${PSEUDO_CODEX_CONSOLE_URL:-http://127.0.0.1:8090}" \
     "${PSEUDO_CODEX_DEPLOY_JOB_ID:-}"

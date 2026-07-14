@@ -16,5 +16,7 @@ assert.match(deploy, /--on-active=2s/);
 assert.doesNotMatch(deploy, /nohup bash -lc/);
 assert.match(deploy, /agent_update_pending/);
 assert.match(deploy, /check-browser-restart-safe\.py/);
+assert.match(deploy, /browser-restart\.lock/);
+assert.match(deploy, /flock 8/);
 
 console.log("DEPLOY_DISPATCHER_RESTART_TIMER_OK");
