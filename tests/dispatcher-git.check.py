@@ -85,6 +85,25 @@ def main() -> None:
             raise AssertionError(task)
         if f'"workspace": "{workspace}"' not in task:
             raise AssertionError(task)
+
+        continuation_job = {
+            "id": "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee",
+            "project": "fixture-project",
+            "title": "Continuation workspace check",
+            "parentJobId": job["id"],
+            "rootJobId": job["id"],
+        }
+        continuation_workspace, continuation_context = dispatcher.prepare_job_workspace(
+            continuation_job, source.resolve()
+        )
+        if continuation_workspace != workspace:
+            raise AssertionError(
+                f"continuation changed worktree: {workspace} -> {continuation_workspace}"
+            )
+        if continuation_context is None or continuation_context["branch"] != context["branch"]:
+            raise AssertionError("continuation changed the job branch")
+        if continuation_context.get("workspaceOwnerJobId") != job["id"]:
+            raise AssertionError("continuation did not retain the root workspace owner")
         (workspace / "app.js").write_text("module.exports = 'after';\n", encoding="utf-8")
         ok, detail = dispatcher.publish_git_changes(job, context)
         if not ok:

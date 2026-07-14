@@ -352,7 +352,11 @@ def prepare_job_workspace(
     remote = str(git_config.get("remote", "origin"))
     base_branch = str(git_config.get("baseBranch", "main"))
     branch_prefix = re.sub(r"[^a-zA-Z0-9._/-]+", "-", str(git_config.get("branchPrefix", "chatgpt-job"))).strip("-/")
-    branch = f"{branch_prefix}/{job['id']}"
+    # Continuation jobs must resume the exact workspace that contains the
+    # parent's successful edits.  Creating a worktree from the new child ID
+    # silently discarded that context and made the recovery prompt untrue.
+    workspace_owner = str(job.get("rootJobId") or job["id"])
+    branch = f"{branch_prefix}/{workspace_owner}"
     execution_mode = str(config.get("executionMode", "local"))
     if execution_mode == "github_direct":
         repository = str(git_config.get("repository", "")).strip()
@@ -370,7 +374,7 @@ def prepare_job_workspace(
             "push": True,
         }
 
-    worktree = STATE_DIR / "worktrees" / project_name / str(job["id"])
+    worktree = STATE_DIR / "worktrees" / project_name / workspace_owner
     worktree.parent.mkdir(parents=True, exist_ok=True)
 
     if (worktree / ".git").exists():
@@ -382,6 +386,7 @@ def prepare_job_workspace(
             "baseBranch": base_branch,
             "push": bool(git_config.get("push", False)),
             "mode": "local",
+            "workspaceOwnerJobId": workspace_owner,
         }
     if worktree.exists():
         raise RuntimeError(f"Git worktree path already exists but is invalid: {worktree}")
@@ -404,6 +409,7 @@ def prepare_job_workspace(
         "baseBranch": base_branch,
         "push": bool(git_config.get("push", False)),
         "mode": "local",
+        "workspaceOwnerJobId": workspace_owner,
     }
 
 
