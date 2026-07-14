@@ -35,6 +35,7 @@ agent_changed=0
 copied_count=0
 dispatcher_restart_scheduled=0
 app_deployed=0
+agent_update_pending=0
 
 resolved_project=$(realpath -- "$project")
 resolved_canonical=$(realpath -- "$canonical_project")
@@ -173,12 +174,21 @@ for spec in "${required_mirrors[@]}"; do
 done
 
 for spec in "${writable_specs[@]}"; do
-  IFS='|' read -r src _dest _mode _group <<<"$spec"
+  IFS='|' read -r src dest _mode group <<<"$spec"
   [[ -f "$src" ]] || {
     printf '%s\n' "AUTO_DEPLOY_FAILED missing source: $src"
     exit 2
   }
+  if [[ "$group" == agent ]] && ! compare_files "$src" "$dest"; then
+    agent_update_pending=1
+  fi
 done
+
+if ((agent_update_pending)); then
+  python3 "$project/scripts/check-browser-restart-safe.py" \
+    "${PSEUDO_CODEX_CONSOLE_URL:-http://127.0.0.1:8090}" \
+    "${PSEUDO_CODEX_DEPLOY_JOB_ID:-}"
+fi
 
 node --check "$project/app.js"
 node --check "$project/check.js"
