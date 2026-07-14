@@ -36,6 +36,13 @@ assert.match(
   agent.commandValidationError("sed -i 's/a/b/' app.js"),
   /Refused direct file mutation/
 );
+assert.equal(
+  agent.commandValidationError(
+    "python3 -c 'from pathlib import Path; Path(\"app.js\").write_text(\"x\")'",
+    true
+  ),
+  ""
+);
 
 const result = {
   repository: "mrtyswin/pseudo-codex-console",
