@@ -550,6 +550,14 @@ function parseRunBlocks(response) {
   while ((match = inlineRegex.exec(response)) !== null) {
     commands.push(match[1].trim());
   }
+  // ChatGPT occasionally drops only the delimiter characters while keeping
+  // the requested RUN keyword and a single command.  Treat that narrow form
+  // as a command instead of burning an entire recovery strategy on a
+  // formatting-only mistake.  Do not broaden this to arbitrary prose.
+  if (commands.length === 0) {
+    const plainMatch = response.trim().match(/^RUN[ \t]*\n([^\n]+)$/);
+    if (plainMatch) commands.push(plainMatch[1].trim());
+  }
   return commands;
 }
 
@@ -798,6 +806,10 @@ async function applyEdits(edits, cwd) {
       continue;
     }
     const content = fs.readFileSync(fullPath, 'utf8');
+    if (edit.oldText === edit.newText) {
+      results.push({ cmd: label, output: 'NO_OP_EDIT_REFUSED: old and new text are identical. Re-read the target and send an actual change.', status: 2 });
+      continue;
+    }
     const occurrences = content.split(edit.oldText).length - 1;
     if (occurrences !== 1) {
       results.push({ cmd: label, output: `Exact old text must occur once; found ${occurrences}.`, status: 2 });
@@ -826,6 +838,10 @@ async function applyReplacements(replacements, cwd) {
       continue;
     }
     const content = fs.readFileSync(fullPath, 'utf8');
+    if (replacement.oldText === replacement.newText) {
+      results.push({ cmd: label, output: 'NO_OP_REPLACEMENT_REFUSED: old and new text are identical. Re-read the target and send an actual change.', status: 2 });
+      continue;
+    }
     const beforeSha = sha256File(fullPath);
     if (replacement.expectedSha && replacement.expectedSha !== beforeSha) {
       results.push({ cmd: label, output: `SHA256 mismatch; expected ${replacement.expectedSha} actual ${beforeSha}.`, status: 2 });
@@ -1426,4 +1442,5 @@ module.exports = {
   parseGithubCompletion,
   parsePatchBlocks,
   parseReplaceBlocks,
+  parseRunBlocks,
 };
