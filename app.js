@@ -3344,7 +3344,7 @@ const CONSOLE_UI_SCRIPT = String.raw`<script>
       selectedJobId = card ? card.dataset.jobId : "";
     }
 
-    document.querySelectorAll("#jobs .job.is-selected").forEach(function (item) {
+    document.querySelectorAll("#jobs .job").forEach(function (item) {
       item.classList.toggle("is-selected", item.dataset.jobId === selectedJobId);
       item.setAttribute("aria-selected", item.dataset.jobId === selectedJobId ? "true" : "false");
     });
@@ -3437,7 +3437,7 @@ const CONSOLE_UI_SCRIPT = String.raw`<script>
     }
 
     var card = event.target.closest && event.target.closest("#jobs .job");
-    if (!card || event.target.closest("button,a,summary,input,select,textarea")) return;
+    if (!card || event.target.closest("button,a,input,select,textarea")) return;
     selectedJobId = card.dataset.jobId;
     renderDetail();
   });
