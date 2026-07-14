@@ -942,6 +942,7 @@ def run_auto_deploy(
                     return False, "\n\n".join(outputs)
                 deploy_workspace = source_workspace
             deploy_environment["PSEUDO_CODEX_JOB_WORKSPACE"] = str(deploy_workspace)
+            deploy_environment["PSEUDO_CODEX_DEPLOY_JOB_ID"] = job_id
             result = subprocess.run(
                 [deploy_command],
                 text=True,

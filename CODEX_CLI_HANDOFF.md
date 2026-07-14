@@ -42,6 +42,7 @@ Do not use the request-console browser queue to modify request-console itself. S
 - New browser jobs start at `https://chatgpt.com/`, because the prior GPT `/project` route is a chat list and does not reliably start a conversation.
 - Retry and auto-continuation were previously racing. This has been fixed by centralizing terminal decisions in the dispatcher.
 - Browser responses remain externally intermittent. A failed session must not restart the shared browser while another session is active; retry only the affected job.
+- A deploy that changes browser-agent runtime files must defer before copying files when any other job is running. This prevents a deploy-triggered service restart from cutting off another browser session.
 
 ## Immediate Verification Plan
 

@@ -14,5 +14,7 @@ assert.match(deploy, /systemctl --user daemon-reload/);
 assert.match(deploy, /systemd-run --user --quiet --collect/);
 assert.match(deploy, /--on-active=2s/);
 assert.doesNotMatch(deploy, /nohup bash -lc/);
+assert.match(deploy, /agent_update_pending/);
+assert.match(deploy, /check-browser-restart-safe\.py/);
 
 console.log("DEPLOY_DISPATCHER_RESTART_TIMER_OK");
