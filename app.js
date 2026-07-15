@@ -1078,6 +1078,7 @@ function humanErrorText(value) {
   if (!raw) return '停止・失敗は記録されていません。';
   var explanation = '処理中に問題が発生しました。下の技術情報を確認してください。';
   if (raw.includes('UBUNTU_WORKSPACE_DIRTY')) explanation = 'Ubuntuの正規ワークスペースに未完了の変更が残っているため、安全のため開始できませんでした。';
+  else if (raw.includes('CHATGPT_THROTTLED')) explanation = 'ChatGPTのリクエスト制限（Too many requests）が待機リトライ後も解除されなかったため停止しました。数分後に再実行してください。';
   else if (raw.includes('MODEL_USAGE_LIMIT')) explanation = 'ChatGPTの利用上限に達したため、自動実行を停止しました。';
   else if (raw.includes('Waiting failed') || raw.includes('unresponsive')) explanation = 'ChatGPTの応答を時間内に受け取れなかったため停止しました。';
   else if (raw.includes('Permission denied')) explanation = '必要なファイルまたはサービスを操作する権限がありませんでした。';
@@ -2250,6 +2251,7 @@ const raw = String(value || "").trim();
 if (!raw) return "停止・失敗は記録されていません。";
 let explanation = "処理中に問題が発生しました。下の技術情報を確認してください。";
 if (raw.includes("UBUNTU_WORKSPACE_DIRTY")) explanation = "Ubuntuの正規ワークスペースに未完了の変更が残っているため、安全のため開始できませんでした。";
+else if (raw.includes("CHATGPT_THROTTLED")) explanation = "ChatGPTのリクエスト制限（Too many requests）が待機リトライ後も解除されなかったため停止しました。数分後に再実行してください。";
 else if (raw.includes("MODEL_USAGE_LIMIT")) explanation = "ChatGPTの利用上限に達したため、自動実行を停止しました。";
 else if (raw.includes("Waiting failed") || raw.includes("unresponsive")) explanation = "ChatGPTの応答を時間内に受け取れなかったため停止しました。";
 else if (raw.includes("Permission denied")) explanation = "必要なファイルまたはサービスを操作する権限がありませんでした。";
@@ -2931,7 +2933,8 @@ const NON_CONTINUABLE_FAILURE_PATTERN = new RegExp([
 "Dispatcher rejected the project path",
 "Dispatcher preflight failed",
 "MODEL_USAGE_LIMIT",
-"Model usage limit detected"
+"Model usage limit detected",
+"CHATGPT_THROTTLED"
 ].join("|"));
 
 function isNonContinuableFailure(result) {
