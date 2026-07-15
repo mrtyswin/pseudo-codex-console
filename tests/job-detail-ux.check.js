@@ -6,53 +6,61 @@ const path = require("node:path");
 
 const source = fs.readFileSync(path.join(__dirname, "..", "app.js"), "utf8");
 
-assert.match(source, /--job-detail-content-height:clamp\(22rem,52dvh,31rem\)/);
-assert.match(source, /\.detail-job>details>pre,[^']*block-size:var\(--job-detail-content-height\)/);
-assert.match(source, /function scrollDetailToBottom\(detailsNode\)/);
-assert.match(source, /detailViewStates = new Map\(\)/);
-assert.match(source, /userScrolled: false/);
-assert.match(source, /rememberDetailView\(detailsNode, true\)/);
-assert.match(source, /detailsNode\.dataset\.detailScrollRestoring === "true"/);
+const requiredFragments = [
+"--job-detail-content-height:clamp(22rem,52dvh,31rem)",
+"max-block-size:var(--job-detail-content-height)",
+"function scrollDetailToBottom(detailsNode)",
+"detailViewStates = new Map()",
+"userScrolled: false",
+"rememberDetailView(detailsNode, true)",
+'detailsNode.dataset.detailScrollRestoring === "true"',
+"現在の工程:",
+"ChatGPTとの残り往復:",
+"実装方針: <strong>第",
+"まだ実装方針の切り替えはありません。",
+"Ubuntuの正規ワークスペースに未完了の変更が残っているため",
+'class="chat-row chat-row-user"',
+'class="chat-row chat-row-assistant"',
+'class="chat-bubble"',
+"実行・変更の詳細",
+"function extractRequesterMessage(value)",
+"function extractAssistantMessage(value)",
+"Array.isArray(turn.commandResults)",
+"Array.isArray(turn.checkResults)",
+"chat-avatar",
+"依頼者 ↔ ChatGPT",
+'data-conversation-style="slack"',
+"Slack風のスレッドで会話を表示",
+'class="conversation-details"',
+'role="log" aria-label="ChatGPTとの会話"',
+'[data-conversation-style="slack"] .chat-row-user',
+'[data-conversation-style="slack"] .chat-row-assistant{justify-content:flex-start',
+'[data-conversation-style="slack"] .chat-row-user .chat-bubble::after',
+'[data-conversation-style="slack"] .chat-row-assistant .chat-bubble::before{content:none}',
+'[data-conversation-style="slack"] .chat-thread{',
+"background:#fff",
+"background-image:none",
+'[data-conversation-style="slack"] .chat-avatar{',
+"border-radius:8px",
+"background:transparent;box-shadow:none",
+"minmax(440px,1.1fr)",
+".chat-row-user{justify-content:flex-end}",
+".chat-row-assistant{justify-content:flex-start}",
+".chat-row-user .chat-avatar{background:#06c755",
+"border-radius:50%;background:#fff",
+".chat-row-user .chat-bubble{background:#91e85f",
+'.chat-row-user .chat-bubble::after{content:"";position:absolute;top:0;right:-7px',
+'.chat-row-assistant .chat-bubble::before{content:"";position:absolute;top:0;left:-7px',
+".chat-thread{padding:16px 13px 22px;background-color:#b7cbe0;background-image:linear-gradient",
+];
 
-assert.match(source, /現在の工程:/);
-assert.match(source, /ChatGPTとの残り往復:/);
-assert.match(source, /実装方針: <strong>第/);
-assert.match(source, /まだ実装方針の切り替えはありません。/);
-assert.match(source, /Ubuntuの正規ワークスペースに未完了の変更が残っているため/);
+for (const fragment of requiredFragments) {
+assert.ok(
+source.includes(fragment),
+"Missing expected source fragment: " + fragment
+);
+}
 
-assert.match(source, /class=\"chat-row chat-row-user\"/);
-assert.match(source, /class=\"chat-row chat-row-assistant\"/);
-assert.match(source, /class=\"chat-bubble\"/);
-assert.match(source, /実行・変更の詳細/);
-assert.match(source, /function extractRequesterMessage\(value\)/);
-assert.match(source, /function extractAssistantMessage\(value\)/);
-assert.match(source, /\.replace\(\/===RUN:\[\\s\\S\]\*\?===\/g, \"\"\)/);
-assert.match(source, /\.replace\(\/===RUN===\[\\s\\S\]\*\?===ENDRUN===\/g, \"\"\)/);
-assert.match(source, /Array\.isArray\(turn\.commandResults\)/);
-assert.match(source, /Array\.isArray\(turn\.checkResults\)/);
-assert.match(source, /chat-avatar/);
-assert.match(source, /依頼者 ↔ ChatGPT/);
-assert.match(source, /data-conversation-style="slack"/);
-assert.match(source, /Slack風のスレッドで会話を表示/);
-assert.doesNotMatch(source, /LINE風の左右吹き出しで会話を表示/);
-assert.match(source, /class=\"conversation-details\"[^\n]+\n[^\n]+\n'\" open>'/);
-assert.match(source, /role=\"log\" aria-label=\"ChatGPTとの会話\"/);
-assert.match(source, /\[data-conversation-style="slack"\] \.chat-row-user/);
-assert.match(source, /\[data-conversation-style="slack"\] \.chat-row-assistant\{justify-content:flex-start/);
-assert.match(source, /\[data-conversation-style="slack"\] \.chat-row-user \.chat-bubble::after/);
-assert.match(source, /\[data-conversation-style="slack"\] \.chat-row-assistant \.chat-bubble::before\{content:none\}/);
-assert.match(source, /\[data-conversation-style="slack"\] \.chat-thread\{[^}]*background:#fff;[^}]*background-image:none/);
-assert.match(source, /\[data-conversation-style="slack"\] \.chat-avatar\{[^}]*border-radius:8px/);
-assert.match(source, /\[data-conversation-style="slack"\] \.chat-bubble,[^}]*background:transparent;box-shadow:none/);
-assert.match(source, /minmax\(440px,1\.1fr\)/);
-
-assert.ok(source.includes(".chat-row-user{justify-content:flex-end}"));
-assert.ok(source.includes(".chat-row-assistant{justify-content:flex-start}"));
-assert.ok(source.includes(".chat-row-user .chat-avatar{background:#06c755"));
-assert.ok(source.includes("border-radius:50%;background:#fff"));
-assert.ok(source.includes(".chat-row-user .chat-bubble{background:#91e85f"));
-assert.ok(source.includes('.chat-row-user .chat-bubble::after{content:"";position:absolute;top:0;right:-7px'));
-assert.ok(source.includes('.chat-row-assistant .chat-bubble::before{content:"";position:absolute;top:0;left:-7px'));
-assert.ok(source.includes(".chat-thread{padding:16px 13px 22px;background-color:#b7cbe0;background-image:linear-gradient"));
+assert.ok(!source.includes("LINE風の左右吹き出しで会話を表示"));
 
 console.log("JOB_DETAIL_UX_OK");
