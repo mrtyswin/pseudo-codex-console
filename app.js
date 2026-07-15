@@ -2918,20 +2918,26 @@ process.env.PSEUDO_CODEX_AUTO_HANDOFF_MAX || "3",
 return Number.isSafeInteger(parsed) && parsed >= 0 ? parsed : 3;
 }
 
-const PREFLIGHT_FAILURE_PATTERN = new RegExp([
+// Failures that a "different implementation strategy" cannot fix: the job
+// never reached ChatGPT (preflight) or the environment itself is exhausted
+// (model usage limit). Spawning continuations for these only chains identical
+// failures until the auto-handoff limit.
+const NON_CONTINUABLE_FAILURE_PATTERN = new RegExp([
 "UBUNTU_WORKSPACE_DIRTY",
 "UBUNTU_WORKSPACE_NOT_ON_MAIN",
 "UBUNTU_WORKSPACE_COMMIT_MISMATCH",
 "AGENT_LAUNCHER_NOT_EXECUTABLE",
 "AGENT_LAUNCH_FAILED",
 "Dispatcher rejected the project path",
-"Dispatcher preflight failed"
+"Dispatcher preflight failed",
+"MODEL_USAGE_LIMIT",
+"Model usage limit detected"
 ].join("|"));
 
-function isPreflightFailure(result) {
+function isNonContinuableFailure(result) {
 if (result.preflight === true) return true;
 const evidence = String(result.lastError || "") + "\n" + String(result.workerLog || "");
-return PREFLIGHT_FAILURE_PATTERN.test(evidence);
+return NON_CONTINUABLE_FAILURE_PATTERN.test(evidence);
 }
 
 function continuationFailureKey(job) {
@@ -3127,11 +3133,8 @@ applyStage(job, "queued", "再実行待ちへ戻す");
 }
 
 if (["failed", "blocked"].includes(job.stage)) {
-if (isPreflightFailure(result)) {
-// A continuation cannot fix a failure that happened before ChatGPT even
-// started (dirty workspace, missing launcher, ...): it would hit the same
-// preflight and die, chaining failures until the auto-handoff limit.
-job.autoHandoffStatus = "開始前チェックで失敗したため自動継続なし（環境を修復してから再実行してください）";
+if (isNonContinuableFailure(result)) {
+job.autoHandoffStatus = "環境要因の失敗（開始前チェックまたは利用上限）のため自動継続なし（回復後に再実行してください）";
 job.autoHandoffCreatedAt = new Date().toISOString();
 } else {
 createContinuationJob(
