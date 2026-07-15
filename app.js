@@ -2598,7 +2598,8 @@ executionResult: String(value.executionResult || ""),
 verificationResult: String(value.verificationResult || ""),
 workerId: String(value.workerId || "").trim().slice(0, 200),
 sessionId: String(value.sessionId || "").trim().slice(0, 200),
-pid: boundedInteger(value.pid, 1, 2147483647, null)
+pid: boundedInteger(value.pid, 1, 2147483647, null),
+preflight: value.preflight === true
 };
 }
 
@@ -2917,6 +2918,22 @@ process.env.PSEUDO_CODEX_AUTO_HANDOFF_MAX || "3",
 return Number.isSafeInteger(parsed) && parsed >= 0 ? parsed : 3;
 }
 
+const PREFLIGHT_FAILURE_PATTERN = new RegExp([
+"UBUNTU_WORKSPACE_DIRTY",
+"UBUNTU_WORKSPACE_NOT_ON_MAIN",
+"UBUNTU_WORKSPACE_COMMIT_MISMATCH",
+"AGENT_LAUNCHER_NOT_EXECUTABLE",
+"AGENT_LAUNCH_FAILED",
+"Dispatcher rejected the project path",
+"Dispatcher preflight failed"
+].join("|"));
+
+function isPreflightFailure(result) {
+if (result.preflight === true) return true;
+const evidence = String(result.lastError || "") + "\n" + String(result.workerLog || "");
+return PREFLIGHT_FAILURE_PATTERN.test(evidence);
+}
+
 function continuationFailureKey(job) {
 const checkpointSource = job.checkpoint || job.updatedAt || job.id;
 return crypto.createHash("sha1").update([
@@ -3110,12 +3127,20 @@ applyStage(job, "queued", "再実行待ちへ戻す");
 }
 
 if (["failed", "blocked"].includes(job.stage)) {
+if (isPreflightFailure(result)) {
+// A continuation cannot fix a failure that happened before ChatGPT even
+// started (dirty workspace, missing launcher, ...): it would hit the same
+// preflight and die, chaining failures until the auto-handoff limit.
+job.autoHandoffStatus = "開始前チェックで失敗したため自動継続なし（環境を修復してから再実行してください）";
+job.autoHandoffCreatedAt = new Date().toISOString();
+} else {
 createContinuationJob(
 jobs,
 job,
 job.lastError || "最終失敗を検知",
 true
 );
+}
 }
 return job;
 

@@ -612,6 +612,35 @@ function structuredEditSyntaxErrors(response, parsed) {
     .map(label => `${label} block is malformed or missing its exact closing delimiter.`);
 }
 
+function protocolFormatHint(response) {
+  // Fires only when a response yielded no parsable action at all. Detect the
+  // recurring failure mode where ChatGPT keeps the RUN/PATCH intent but drops
+  // the ===...=== delimiters (or uses the unsupported apply-patch format), and
+  // answer with the exact expected syntax instead of a generic nudge; the
+  // generic nudge repeatedly failed to break this loop in production.
+  const normalized = String(response || '').replace(/\r\n?/g, '\n');
+  const attempted =
+    /^(?:RUN|PATCH|EDIT|REPLACE|FILE)\b:?[ \t]*$/m.test(normalized) ||
+    /^(?:RUN|PATCH|EDIT|REPLACE|FILE):[ \t]/m.test(normalized) ||
+    /\*\*\* Begin Patch/.test(normalized) ||
+    (/^--- a\//m.test(normalized) && /^\+\+\+ b\//m.test(normalized));
+  if (!attempted) return '';
+  return [
+    'PROTOCOL_FORMAT_ERROR: your action was ignored because its delimiters were not recognized.',
+    'Every block needs the exact ===...=== delimiters, each on its own line:',
+    '===RUN===',
+    '<one short shell command>',
+    '===ENDRUN===',
+    '===PATCH===',
+    '--- a/relative/path',
+    '+++ b/relative/path',
+    '@@ unified diff hunks @@',
+    '===ENDPATCH===',
+    'Bare RUN/PATCH keywords, "RUN:" prefixes, and "*** Begin Patch" apply-patch format are NOT supported.',
+    'Resend the same action now using the exact delimiters above.',
+  ].join('\n');
+}
+
 function parseEditBlocks(response) {
   const normalized = String(response || '').replace(/\r\n?/g, '\n');
   const edits = [];
@@ -1473,7 +1502,14 @@ async function main() {
     }
 
     phase = hasEdited ? 'TEST' : 'PLAN';
-    prompt = `No valid action or completion marker was found. Continue from phase ${phase}. Use short RUN, PATCH, EDIT, or a complete FILE block. Remaining turns: ${MAX_TURNS - turns}.`;
+    const formatHint = protocolFormatHint(response);
+    prompt = formatHint
+      ? `${formatHint}\nRemaining turns: ${MAX_TURNS - turns}.`
+      : `No valid action or completion marker was found. Continue from phase ${phase}. Use short RUN, PATCH, EDIT, or a complete FILE block. Remaining turns: ${MAX_TURNS - turns}.`;
+    if (formatHint) {
+      executionLog.push('PROTOCOL_FORMAT_ERROR: unrecognized action delimiters; sent exact-syntax correction.');
+      console.error('\n[protocol format error] sent exact-syntax correction to ChatGPT');
+    }
     if (updateNoProgress()) {
       const reason = `No acceptance progress for ${MAX_NO_PROGRESS_TURNS} consecutive turns.`;
       if (await startFreshStrategy(reason, 'no_progress', response)) continue;
@@ -1508,5 +1544,6 @@ module.exports = {
   parsePatchBlocks,
   parseReplaceBlocks,
   parseRunBlocks,
+  protocolFormatHint,
   structuredEditSyntaxErrors,
 };
