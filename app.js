@@ -2439,11 +2439,19 @@ return Object.fromEntries(new URLSearchParams(body));
 
 function parseJobRequest(request, body) {
 const value = parseBody(request, body);
+const instruction = String(value.instruction || "").trim();
+const requestedTitle = String(value.title || "").trim();
+const normalizedTitle = instruction.replace(/\s+/g, " ");
+const title = requestedTitle || (
+normalizedTitle.length <= 60
+? normalizedTitle
+: normalizedTitle.slice(0, 59).trimEnd() + "…"
+);
 
 return {
 project: String(value.project || DEFAULT_PROJECT).trim(),
-title: String(value.title || "").trim(),
-instruction: String(value.instruction || "").trim(),
+title,
+instruction,
 kind: value.kind === "test" || value.isTest === true ? "test" : "job"
 };
 }
@@ -3830,8 +3838,8 @@ created.textContent = "作成 " + formatCreatedAt(job.createdAt);
         panel.hidden = !panel.hidden;
         toggle.setAttribute("aria-expanded", panel.hidden ? "false" : "true");
         if (!panel.hidden) {
-          var title = panel.querySelector('input[name="title"]');
-          if (title) title.focus();
+          var instruction = panel.querySelector('textarea[name="instruction"]');
+          if (instruction) instruction.focus();
         }
       }
       return;
@@ -3971,10 +3979,10 @@ function renderPage(jobs, message) {
     '<article class="kpi" style="--accent:#16a34a;--tint:#f0fdf4"><span class="kpi-label">完了</span><strong class="kpi-value" data-kpi-value="completed">', String(completedCount), '</strong><span class="kpi-note">保存済み</span></article>',
     "</section>",
     '<section id="new-job-panel" class="new-job-panel" hidden>',
-    '<div class="panel-heading"><div><h2>新規ジョブ</h2><p>既存の登録APIをそのまま使用します。</p></div><button type="button" class="icon-button" data-new-job-close aria-label="閉じる">×</button></div>',
+    '<div class="panel-heading"><div><h2>新規ジョブ</h2><p>指示の先頭からジョブタイトルを自動生成します。</p></div><button type="button" class="icon-button" data-new-job-close aria-label="閉じる">×</button></div>',
     '<form method="post" action="/jobs" class="new-job-form">',
     '<div class="field"><label for="project">プロジェクト</label><select id="project" name="project" required>', renderProjectOptions(), '</select></div>',
-    '<div class="field"><label for="title">ジョブタイトル</label><input id="title" name="title" maxlength="200" required></div>',
+    '',
     '<div class="field" style="grid-column:1/-1"><label for="instruction">詳細な自然言語指示</label><textarea id="instruction" name="instruction" maxlength="20000" required></textarea></div>',
     '<div class="submit-field" style="grid-column:1/-1"><button type="submit" class="primary-button">キューへ登録</button></div>',
     "</form>",
@@ -4502,9 +4510,9 @@ await readBody(request)
     return;
   }
 
-  if (!values.title || !values.instruction) {
+  if (!values.instruction) {
     sendJson(response, 400, {
-      error: "title and instruction are required"
+      error: "instruction is required"
     });
     return;
   }

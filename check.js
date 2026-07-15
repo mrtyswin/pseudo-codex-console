@@ -85,6 +85,18 @@ assert.equal(health.status, "ok");
 assert.equal(health.queueMode, "dispatcher");
 
 const token = crypto.randomUUID();
+
+const generatedTitleJob = await postJson("/jobs", {
+project: "request-console",
+instruction: " ジョブタイトルを 指示内容から\n自動生成する " + token,
+kind: "test"
+});
+assert.equal(
+generatedTitleJob.title,
+"ジョブタイトルを 指示内容から 自動生成する " + token
+);
+assert.equal(generatedTitleJob.isTest, true);
+
 const testOnly = await createJob("Test-only " + token, "test");
 assert.equal(testOnly.isTest, true);
 
@@ -364,7 +376,7 @@ assert.ok(handoff.includes("最終回答テスト"));
 assert.ok(handoff.includes("===RUN: node --check app.js==="));
 
 const listed = await requestJson("/api/jobs", { method: "GET" });
-assert.equal(listed.jobs.length, 8);
+assert.equal(listed.jobs.length, 9);
 assert.equal(listed.jobs.find(function(job) { return job.id === testOnly.id; }).kind, "test");
 console.log("REQUEST_CONSOLE_ISOLATED_REGRESSION_OK " + token);
 }
