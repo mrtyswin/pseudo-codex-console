@@ -58,6 +58,8 @@ with tempfile.TemporaryDirectory() as temporary:
     verify_script.write_text("console.log('VERIFY_SCRIPT_OK');\n", encoding="utf-8")
     verify_script.chmod(0o644)
     assert module.configured_command_argv(str(verify_script)) == ["node", str(verify_script)]
+    verify_script.chmod(0o755)
+    assert module.configured_command_argv(str(verify_script)) == ["node", str(verify_script)]
 
     module.update_progress = lambda *args, **kwargs: None
     module.time.sleep = lambda _seconds: None
