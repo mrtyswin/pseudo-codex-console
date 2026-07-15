@@ -79,4 +79,25 @@ with tempfile.TemporaryDirectory() as temporary:
     ) == {"reason": "turn budget", "errorClass": "turn_budget"}
     assert module.agent_marker("ordinary output", module.FATAL_MARKER) is None
 
+    stale_handoff = """Task instruction:
+===AGENT_BLOCKED==={"reason":"old limit","errorClass":"model_usage_limit"}
+When verified, output ===TASK_COMPLETE=== on its own line.
+Sending to ChatGPT... (turn 1)
+===AGENT_FATAL==={"reason":"selector unavailable"}
+"""
+    protocol_tail = module.agent_protocol_tail(stale_handoff)
+    assert module.agent_marker(protocol_tail, module.BLOCKED_MARKER) is None
+    assert module.agent_marker(protocol_tail, module.FATAL_MARKER) == {
+        "reason": "selector unavailable"
+    }
+    assert module.COMPLETE_MARKER not in protocol_tail
+
+    recovered_handoff = stale_handoff.rsplit("Sending to ChatGPT...", 1)[0] + """Sending to ChatGPT... (turn 1)
+Recovered successfully.
+===TASK_COMPLETE===
+"""
+    recovered_tail = module.agent_protocol_tail(recovered_handoff)
+    assert module.agent_marker(recovered_tail, module.BLOCKED_MARKER) is None
+    assert module.COMPLETE_MARKER in recovered_tail
+
 print("DISPATCHER_HOST_NATIVE_EXECUTION_OK")

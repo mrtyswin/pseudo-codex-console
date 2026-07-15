@@ -61,6 +61,14 @@ BROWSER_RESTART_LOCK = Path(
 )
 
 
+def agent_protocol_tail(output: str) -> str:
+    """Return output from the browser agent's current request only."""
+    separator = "Sending to ChatGPT..."
+    if separator not in output:
+        return output
+    return output.rsplit(separator, 1)[1]
+
+
 def agent_marker(output: str, marker: str) -> dict[str, str] | None:
     """Read the last structured terminal hint emitted by the browser agent."""
     for line in reversed(output.splitlines()):
@@ -1172,7 +1180,8 @@ def run_job(job: dict[str, Any]) -> None:
     if manually_stopped:
         LOG.info("stopped job=%s by user", job_id)
         return
-    blocked_hint = agent_marker(output, BLOCKED_MARKER)
+    protocol_output = agent_protocol_tail(output)
+    blocked_hint = agent_marker(protocol_output, BLOCKED_MARKER)
     if blocked_hint is not None:
         # The agent reached a deterministic controller limit. It deliberately
         # did not write a terminal result itself: only this dispatcher converts
@@ -1183,12 +1192,12 @@ def run_job(job: dict[str, Any]) -> None:
         LOG.warning("job=%s stopped by agent controller: %s", job_id, reason)
         return
 
-    fatal_hint = agent_marker(output, FATAL_MARKER)
+    fatal_hint = agent_marker(protocol_output, FATAL_MARKER)
     current_after_agent = get_job(job_id)
     changed_files = current_after_agent.get("changedFiles", []) if current_after_agent else []
     has_file_changes = bool(changed_files)
     if not failure:
-        failure = "" if return_code == 0 and COMPLETE_MARKER in output else (
+        failure = "" if return_code == 0 and COMPLETE_MARKER in protocol_output else (
             f"Agent exited {return_code}; completion marker missing." if return_code == 0 else f"Agent exited {return_code}."
         )
     if fatal_hint and fatal_hint.get("reason"):

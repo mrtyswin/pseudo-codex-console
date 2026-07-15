@@ -13,9 +13,11 @@ const dispatcherSource = fs.readFileSync(path.join(root, "dispatcher", "dispatch
 assert.match(agentSource, /const BLOCKED_MARKER = '===AGENT_BLOCKED===';/);
 assert.match(agentSource, /const FATAL_MARKER = '===AGENT_FATAL===';/);
 assert.doesNotMatch(agentSource, /await reportResult\(args, \{/);
+assert.match(dispatcherSource, /def agent_protocol_tail\(output: str\)/);
 assert.match(dispatcherSource, /def agent_marker\(output: str, marker: str\)/);
-assert.match(dispatcherSource, /blocked_hint = agent_marker\(output, BLOCKED_MARKER\)/);
-assert.match(dispatcherSource, /fatal_hint = agent_marker\(output, FATAL_MARKER\)/);
+assert.match(dispatcherSource, /blocked_hint = agent_marker\(protocol_output, BLOCKED_MARKER\)/);
+assert.match(dispatcherSource, /fatal_hint = agent_marker\(protocol_output, FATAL_MARKER\)/);
+assert.match(dispatcherSource, /COMPLETE_MARKER in protocol_output/);
 assert.match(dispatcherSource, /update_result\(job_id, "needs_human", reason, detail/);
 
 console.log("AGENT_TERMINAL_OWNER_OK");
