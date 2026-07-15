@@ -50,8 +50,11 @@ const GITHUB_COMPLETE_START = '===GITHUB_COMPLETE===';
 const GITHUB_COMPLETE_END = '===END_GITHUB_COMPLETE===';
 const GITHUB_DIRECT_MAX_TURNS = Number.parseInt(process.env.PSEUDO_CODEX_GITHUB_DIRECT_MAX_TURNS || '10', 10);
 const CHATGPT_REQUEST_TIMEOUT_MS = Number.parseInt(
-  // Must exceed browser navigation retry plus response reload/resubmit recovery.
-  process.env.CHATGPT_REQUEST_TIMEOUT_MS || '300000',
+  // Must exceed browser navigation retry plus response reload/resubmit
+  // recovery, PLUS the in-call throttle waits (PSEUDO_CODEX_THROTTLE_RETRIES x
+  // PSEUDO_CODEX_THROTTLE_WAIT_MS, 3x90s by default): the throttle pause runs
+  // inside this same request and a lower cap kills it with ETIMEDOUT.
+  process.env.CHATGPT_REQUEST_TIMEOUT_MS || '600000',
   10
 );
 const COMMAND_OUTPUT_LIMIT = Number.parseInt(

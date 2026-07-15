@@ -460,8 +460,10 @@ async function dismissLimitNotice(page) {
   }).catch(() => {});
 }
 
+// The combined wait (retries x wait) must stay well under the caller's
+// CHATGPT_REQUEST_TIMEOUT_MS or the whole request dies with ETIMEDOUT.
 const THROTTLE_RETRY_LIMIT = Number.parseInt(process.env.PSEUDO_CODEX_THROTTLE_RETRIES || '3', 10);
-const THROTTLE_WAIT_MS = Number.parseInt(process.env.PSEUDO_CODEX_THROTTLE_WAIT_MS || '120000', 10);
+const THROTTLE_WAIT_MS = Number.parseInt(process.env.PSEUDO_CODEX_THROTTLE_WAIT_MS || '90000', 10);
 
 async function throwIfUsageLimited(page, log) {
   let detected = await detectUsageLimit(page);
