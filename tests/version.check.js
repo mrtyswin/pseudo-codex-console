@@ -11,8 +11,8 @@ const packageJson = JSON.parse(
 );
 const app = fs.readFileSync(path.join(root, "app.js"), "utf8");
 
-const currentVersion = "0.1.1";
-const previousVersion = "0.1.0";
+const currentVersion = "0.1.2";
+const previousVersion = "0.1.1";
 
 assert.strictEqual(packageJson.version, currentVersion);
 assert.ok(
