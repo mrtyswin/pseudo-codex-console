@@ -15,6 +15,7 @@
       "remote": "origin",
       "baseBranch": "main",
       "branchPrefix": "request-console",
+      "workspaceMode": "worktree",
       "push": true
     }
   }

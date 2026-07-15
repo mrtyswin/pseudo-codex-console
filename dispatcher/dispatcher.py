@@ -11,6 +11,7 @@ import logging
 import os
 from pathlib import Path
 import re
+import shlex
 import signal
 import socket
 import subprocess
@@ -103,6 +104,8 @@ def load_project_configs() -> dict[str, dict[str, Any]]:
         git_config = config.get("git", {})
         if git_config and not isinstance(git_config, dict):
             raise RuntimeError(f"Project {name} git configuration must be an object")
+        if isinstance(git_config, dict) and git_config.get("workspaceMode", "worktree") not in {"worktree", "primary"}:
+            raise RuntimeError(f"Project {name} git.workspaceMode must be worktree or primary")
     return configs
 
 
@@ -362,6 +365,27 @@ def prepare_job_workspace(
 
     remote = str(git_config.get("remote", "origin"))
     base_branch = str(git_config.get("baseBranch", "main"))
+    workspace_mode = str(git_config.get("workspaceMode", "worktree"))
+    if execution_mode == "local" and workspace_mode == "primary":
+        ready, detail = validate_primary_workspace(source_workspace, base_branch)
+        if not ready:
+            raise RuntimeError(detail)
+        fetch = run_git(source_workspace, ["fetch", "--prune", remote, base_branch], timeout=300)
+        if fetch.returncode != 0:
+            raise RuntimeError("Cannot fetch Git base branch: " + git_error(fetch))
+        pull = run_git(source_workspace, ["pull", "--ff-only", remote, base_branch], timeout=300)
+        if pull.returncode != 0:
+            raise RuntimeError("Cannot fast-forward primary workspace: " + git_error(pull))
+        return source_workspace, {
+            "source": source_workspace,
+            "worktree": source_workspace,
+            "branch": base_branch,
+            "remote": remote,
+            "baseBranch": base_branch,
+            "push": bool(git_config.get("push", False)),
+            "mode": "primary",
+            "workspaceOwnerJobId": str(job.get("rootJobId") or job["id"]),
+        }
     branch_prefix = re.sub(r"[^a-zA-Z0-9._/-]+", "-", str(git_config.get("branchPrefix", "chatgpt-job"))).strip("-/")
     # Continuation jobs must resume the exact workspace that contains the
     # parent's successful edits.  Creating a worktree from the new child ID
@@ -649,7 +673,7 @@ def sync_workspace_to_origin_main(project_name: str, workspace: Path) -> tuple[b
 
 
 def cleanup_git_worktree(context: dict[str, Any] | None) -> None:
-    if context is None or "worktree" not in context:
+    if context is None or "worktree" not in context or context.get("mode") == "primary":
         return
     source = Path(context["source"])
     worktree = Path(context["worktree"])
@@ -716,12 +740,17 @@ def task_for(
             str(job.get("instruction", "")),
     ]
     if isinstance(git_config, dict) and git_config.get("enabled", False):
+        primary_workspace = git_config.get("workspaceMode", "worktree") == "primary"
         lines.extend(
             [
                 "",
                 "GIT AUTHORING CONTRACT:",
                 "This project is configured to treat the Git workspace as the source of truth.",
-                "Make file changes only inside the dedicated Ubuntu host Git worktree for this job.",
+                (
+                    "Make file changes directly in the canonical Ubuntu Git workspace on its main branch."
+                    if primary_workspace
+                    else "Make file changes only inside the dedicated Ubuntu host Git worktree for this job."
+                ),
                 "Do not attempt manual git push credentials setup inside the task.",
                 "After you verify the change and output ===TASK_COMPLETE===, the host dispatcher will commit and optionally push using host-side credentials if configured.",
             ]
@@ -923,6 +952,17 @@ def read_log_tail(path: Path, limit: int = 200_000) -> str:
         return ""
 
 
+def configured_command_argv(command: str) -> list[str]:
+    """Build argv for a trusted project command, including non-executable Node scripts."""
+    argv = shlex.split(command)
+    if not argv:
+        return []
+    target = Path(argv[0])
+    if target.suffix == ".js" and target.is_file() and not os.access(target, os.X_OK):
+        return ["node", *argv]
+    return argv
+
+
 def run_auto_deploy(
     job: dict[str, Any],
     workspace: Path,
@@ -954,8 +994,11 @@ def run_auto_deploy(
                 deploy_workspace = source_workspace
             deploy_environment["PSEUDO_CODEX_JOB_WORKSPACE"] = str(deploy_workspace)
             deploy_environment["PSEUDO_CODEX_DEPLOY_JOB_ID"] = job_id
+            deploy_argv = configured_command_argv(deploy_command)
+            if not deploy_argv:
+                return False, "AUTO_DEPLOY_CONFIG_ERROR deployCommand is empty"
             result = subprocess.run(
-                [deploy_command],
+                deploy_argv,
                 text=True,
                 encoding="utf-8",
                 errors="replace",
@@ -975,8 +1018,9 @@ def run_auto_deploy(
 
             verify_command = str(project_config.get("verifyCommand", ""))
             if verify_command:
+                verify_argv = configured_command_argv(verify_command)
                 verify = subprocess.run(
-                    [verify_command],
+                    verify_argv,
                     text=True,
                     encoding="utf-8",
                     errors="replace",
@@ -1044,6 +1088,10 @@ def run_auto_deploy(
                 f"auto-deploy attempt={attempt} timed out after {AUTO_DEPLOY_TIMEOUT_SECONDS}s\n" +
                 compact(stdout + stderr, 20_000)
             )
+            if attempt == 1:
+                time.sleep(10)
+        except OSError as exc:
+            outputs.append(f"auto-deploy attempt={attempt} launch failed: {exc}")
             if attempt == 1:
                 time.sleep(10)
     return False, "\n\n".join(outputs)
@@ -1319,7 +1367,11 @@ def claim_next_job(excluded_projects: set[str] | None = None) -> dict[str, Any] 
 def project_allows_parallel(project: str) -> bool:
     config = refresh_project_configs().get(project, {})
     git_config = config.get("git", {})
-    return isinstance(git_config, dict) and bool(git_config.get("enabled", False))
+    return (
+        isinstance(git_config, dict)
+        and bool(git_config.get("enabled", False))
+        and git_config.get("workspaceMode", "worktree") != "primary"
+    )
 
 
 def main() -> int:

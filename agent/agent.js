@@ -278,7 +278,7 @@ function sha256File(filePath) {
 }
 
 function walkWorkspace(root, limit = 500) {
-  const ignored = new Set(['.git', 'node_modules', 'backups', 'recovery', '.restart-test']);
+  const ignored = new Set(['.git', 'node_modules', 'backups', 'recovery', '.restart-test', '__pycache__']);
   const files = [];
   const visit = directory => {
     if (files.length >= limit) return;
@@ -286,7 +286,7 @@ function walkWorkspace(root, limit = 500) {
       if (files.length >= limit || ignored.has(entry.name)) continue;
       const fullPath = path.join(directory, entry.name);
       if (entry.isDirectory()) visit(fullPath);
-      else if (entry.isFile()) files.push(fullPath);
+      else if (entry.isFile() && !entry.name.endsWith('.pyc')) files.push(fullPath);
     }
   };
   visit(root);
@@ -587,6 +587,25 @@ function parsePatchBlocks(response) {
     if (content) patches.push({ content, expectedSha: (match[1] || '').toLowerCase() });
   }
   return patches;
+}
+
+function structuredEditSyntaxErrors(response, parsed) {
+  const normalized = String(response || '').replace(/\r\n?/g, '\n');
+  const expected = {
+    PATCH: (normalized.match(/===PATCH(?:\s+SHA256:[a-f0-9]{64})?===/gi) || []).length,
+    EDIT: (normalized.match(/===EDIT:\s*[^\n=]+===/g) || []).length,
+    REPLACE: (normalized.match(/===REPLACE:\s*[^\n=]+===/g) || []).length,
+    FILE: (normalized.match(/===FILE(?:_BASE64)?:\s*[^\n=]+===/g) || []).length,
+  };
+  const actual = {
+    PATCH: parsed.patches.length,
+    EDIT: parsed.edits.length,
+    REPLACE: parsed.replacements.length,
+    FILE: parsed.changes.length,
+  };
+  return Object.keys(expected)
+    .filter(label => expected[label] > actual[label])
+    .map(label => `${label} block is malformed or missing its exact closing delimiter.`);
 }
 
 function parseEditBlocks(response) {
@@ -1027,6 +1046,7 @@ async function main() {
   let turns = 0;
   let phase = 'INSPECT';
   let hasEdited = false;
+  let mutationIntentSeen = false;
   let verificationPassed = false;
   let noProgressTurns = 0;
   let inspectTurns = 0;
@@ -1251,6 +1271,15 @@ async function main() {
     const replacements = parseReplaceBlocks(response);
     const completed = response.includes(COMPLETE_MARKER);
     const mutationResults = [];
+    const syntaxErrors = structuredEditSyntaxErrors(response, {
+      changes,
+      patches,
+      edits,
+      replacements,
+    });
+    if (edits.length || replacements.length || patches.length || changes.length || syntaxErrors.length) {
+      mutationIntentSeen = true;
+    }
     await reportTurn(args, {
       turn: turns,
       sentAt,
@@ -1261,9 +1290,31 @@ async function main() {
       fileChanges: [
         ...edits.map(item => ({ path: item.path, contentLength: item.newText.length })),
         ...replacements.map(item => ({ path: item.path, contentLength: item.newText.length })),
+        ...patches.flatMap(item => patchTargetPaths(item.content).map(filePath => ({
+          path: filePath,
+          contentLength: item.content.length,
+        }))),
         ...changes.map(item => ({ path: item.path, contentLength: item.content.length })),
       ],
     });
+
+    if (syntaxErrors.length > 0) {
+      const detail = 'MALFORMED_STRUCTURED_EDIT_REFUSED: ' + syntaxErrors.join(' ');
+      executionLog.push(detail);
+      console.error(`\n[structured edit syntax invalid]\n${detail}`);
+      prompt = [
+        detail,
+        'No RUN command from that response was executed and no completion claim was accepted.',
+        'Re-read the smallest target range and send one valid PATCH/EDIT/REPLACE or complete FILE block with the exact delimiter.',
+      ].join('\n');
+      if (updateNoProgress()) {
+        const reason = `No acceptance progress for ${MAX_NO_PROGRESS_TURNS} consecutive turns.`;
+        if (await startFreshStrategy(reason, 'edit_syntax', detail)) continue;
+        await blockJob(reason, 'edit_syntax');
+        return;
+      }
+      continue;
+    }
 
     if (
       args.executionMode === 'verify_only' &&
@@ -1396,6 +1447,16 @@ async function main() {
         }
         continue;
       }
+      if (mutationIntentSeen && !hasEdited) {
+        prompt = 'Completion rejected: a previous response attempted to modify files, but no structured edit was successfully applied. Apply and verify a real file change before TASK_COMPLETE.';
+        if (updateNoProgress()) {
+          const reason = `No acceptance progress for ${MAX_NO_PROGRESS_TURNS} consecutive turns.`;
+          if (await startFreshStrategy(reason, 'no_applied_edit', prompt)) continue;
+          await blockJob(reason, 'no_applied_edit');
+          return;
+        }
+        continue;
+      }
       const finalAnswer = cleanFinalAnswer(response);
       if (!hasEdited && !finalAnswer) {
         prompt = 'Completion rejected: provide a concise user-facing conclusion based on the observed Ubuntu host command results, then output TASK_COMPLETE.';
@@ -1443,4 +1504,5 @@ module.exports = {
   parsePatchBlocks,
   parseReplaceBlocks,
   parseRunBlocks,
+  structuredEditSyntaxErrors,
 };
