@@ -953,12 +953,12 @@ def read_log_tail(path: Path, limit: int = 200_000) -> str:
 
 
 def configured_command_argv(command: str) -> list[str]:
-    """Build argv for a trusted project command, including non-executable Node scripts."""
+    """Build argv for a trusted project command, running JavaScript through Node."""
     argv = shlex.split(command)
     if not argv:
         return []
     target = Path(argv[0])
-    if target.suffix == ".js" and target.is_file() and not os.access(target, os.X_OK):
+    if target.suffix == ".js" and target.is_file():
         return ["node", *argv]
     return argv
 
