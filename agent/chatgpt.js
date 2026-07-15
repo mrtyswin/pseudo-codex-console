@@ -276,6 +276,7 @@ function responseAppearedAfterReload(beforeState, afterState) {
   // Only accept that text change as a new response when the newly submitted
   // user turn also survived the reload.
   if (afterState.userCount <= beforeState.userCount) return false;
+  if (!String(afterState.lastText || '').trim()) return false;
   return (
     afterState.count > beforeState.count ||
     afterState.lastText !== beforeState.lastText
@@ -376,28 +377,51 @@ async function pageIsStreaming(page) {
   });
 }
 
-async function detectUsageLimit(page) {
-  return page.evaluate(() => {
-    const text = (document.body?.innerText || '').replace(/\s+/g, ' ').trim();
-    const patterns = [
-      /usage limit/i,
-      /rate limit/i,
-      /token limit/i,
-      /limit reached/i,
-      /try again later/i,
-      /reset(?:s)? at/i,
-      /upgrade to continue/i,
-      /too many requests/i,
-      /temporarily limited access/i,
-      /wait a few minutes/i,
-      /利用上限/,
-      /制限に達し/,
-    ];
+function findUsageLimitText(candidates) {
+  const patterns = [
+    /usage limit/i,
+    /rate limit/i,
+    /token limit/i,
+    /limit reached/i,
+    /try again later/i,
+    /reset(?:s)? at/i,
+    /upgrade to continue/i,
+    /too many requests/i,
+    /temporarily limited access/i,
+    /wait a few minutes/i,
+    /利用上限/,
+    /制限に達し/,
+  ];
+  for (const candidate of Array.isArray(candidates) ? candidates : []) {
+    const text = String(candidate || '').replace(/\s+/g, ' ').trim();
     const match = patterns.find(pattern => pattern.test(text));
-    if (!match) return '';
+    if (!match) continue;
     const index = text.search(match);
     return text.slice(Math.max(0, index - 120), index + 500);
-  }).catch(() => '');
+  }
+  return '';
+}
+
+async function detectUsageLimit(page) {
+  const candidates = await page.evaluate(() => {
+    const selectors = [
+      '[role="dialog"]',
+      '[role="alert"]',
+      '[aria-live="assertive"]',
+      '[data-testid*="toast"]',
+      '[data-testid*="error"]',
+    ];
+    const nodes = selectors.flatMap(selector => [...document.querySelectorAll(selector)]);
+    return [...new Set(nodes)]
+      .filter(node => !node.closest('[data-turn], [data-message-author-role]'))
+      .filter(node => {
+        const style = window.getComputedStyle(node);
+        return style.display !== 'none' && style.visibility !== 'hidden';
+      })
+      .map(node => (node.innerText || node.textContent || '').trim())
+      .filter(Boolean);
+  }).catch(() => []);
+  return findUsageLimitText(candidates);
 }
 
 async function throwIfUsageLimited(page, log) {

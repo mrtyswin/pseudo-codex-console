@@ -28,6 +28,9 @@ assert.match(source, /too many requests/i);
 assert.match(source, /temporarily limited access/i);
 assert.match(source, /wait a few minutes/i);
 assert.match(source, /await throwIfUsageLimited\(page, log\)/);
+assert.match(source, /function findUsageLimitText\(candidates\)/);
+assert.match(source, /!node\.closest\('\[data-turn\], \[data-message-author-role\]'\)/);
+assert.doesNotMatch(source, /document\.body\?\.innerText/);
 assert.match(source, /waitUntil: 'domcontentloaded'/);
 assert.match(source, /waitForSelector\('#prompt-textarea', \{ timeout: 20_000 \}\)/);
 assert.match(source, /async function reloadForRecovery\(page, log\)/);
@@ -62,6 +65,32 @@ assert.equal(responseAppearedAfterReload(
   { count: 1, lastText: "original", userCount: 1 },
   { count: 2, lastText: "new response", userCount: 2 }
 ), true, "a persisted user turn followed by a new assistant turn is a response");
+assert.equal(responseAppearedAfterReload(
+  { count: 1, lastText: "original", userCount: 1 },
+  { count: 2, lastText: "", userCount: 2 }
+), false, "an empty assistant placeholder must trigger a resend after reload");
+
+const usageDetectionSource = source.slice(
+  source.indexOf("function findUsageLimitText"),
+  source.indexOf("async function throwIfUsageLimited")
+);
+const usageDetection = new Function(
+  `${usageDetectionSource}\nreturn { findUsageLimitText, detectUsageLimit };`
+)();
+assert.match(
+  usageDetection.findUsageLimitText(["You have reached the usage limit. Try again later."]),
+  /usage limit/i
+);
+assert.equal(
+  usageDetection.findUsageLimitText(["Ordinary conversation without a system notice."]),
+  ""
+);
+(async () => {
+  const fromConversationOnly = await usageDetection.detectUsageLimit({
+    evaluate: async () => [],
+  });
+  assert.equal(fromConversationOnly, "", "conversation history is not a usage-limit signal");
+})();
 
 const loadRecoveryReload = new Function(
   "setTimeout",
