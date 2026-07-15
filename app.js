@@ -963,12 +963,43 @@ function clip(value, limit) {
   return text.length > limit ? text.slice(0, limit) + '\n…省略…' : text;
 }
 
+function requesterMessage(value) {
+  var text = sanitizeUserFacingText(value);
+  var marker = '\nTask instruction:\n';
+  var markerIndex = text.lastIndexOf(marker);
+  if (markerIndex >= 0) text = text.slice(markerIndex + marker.length);
+  var stops = [
+    '\n\nGIT AUTHORING CONTRACT:',
+    '\n\nREQUEST-CONSOLE SPECIAL RULE:',
+    '\n\nThis is an infrastructure retry.'
+  ];
+  stops.forEach(function (stop) {
+    var index = text.indexOf(stop);
+    if (index >= 0) text = text.slice(0, index);
+  });
+  return clip(text.trim(), 5000);
+}
+
+function assistantMessage(value) {
+  return clip(sanitizeUserFacingText(value)
+    .replace(/--- RESPONSE ---/g, '')
+    .replace(/--- END ---/g, '')
+    .replace(/===RUN:[\s\S]*?===/g, '')
+    .replace(/===RUN===[\s\S]*?===ENDRUN===/g, '')
+    .replace(/===PATCH===[\s\S]*?===ENDPATCH===/g, '')
+    .replace(/===EDIT===[\s\S]*?===ENDEDIT===/g, '')
+    .replace(/===REPLACE===[\s\S]*?===ENDREPLACE===/g, '')
+    .replace(/===FILE(?::[^\n]*)?===[\s\S]*?===ENDFILE===/g, '')
+    .replace(/===TASK_COMPLETE===/g, '')
+    .trim(), 7000);
+}
+
 function conversationHtml(turns) {
   var values = Array.isArray(turns) ? turns.slice(-20) : [];
   if (!values.length) return '';
   return values.map(function (turn) {
-    var prompt = clip(sanitizeUserFacingText(turn.prompt), 5000);
-    var response = clip(sanitizeUserFacingText(turn.response), 7000);
+    var prompt = requesterMessage(turn.prompt);
+    var response = assistantMessage(turn.response);
     var actions = [];
     if (Array.isArray(turn.runCommands) && turn.runCommands.length) {
       actions.push('Ubuntuで実行したコマンド:\n' + turn.runCommands.join('\n'));
@@ -978,19 +1009,35 @@ function conversationHtml(turns) {
         return '- ' + String(change.path || '');
       }).join('\n'));
     }
+    if (Array.isArray(turn.commandResults) && turn.commandResults.length) {
+      actions.push('コマンド結果:\n' + turn.commandResults.map(function (result) {
+        var status = result.rejected ? '拒否' : result.timedOut ? 'タイムアウト' :
+          result.exitStatus == null ? '状態不明' : '終了 ' + result.exitStatus;
+        return '[' + status + '] ' + String(result.command || '') +
+          (result.output ? '\n' + clip(sanitizeUserFacingText(result.output), 5000) : '');
+      }).join('\n\n'));
+    }
+    if (Array.isArray(turn.checkResults) && turn.checkResults.length) {
+      actions.push('検証結果:\n' + turn.checkResults.map(function (result) {
+        return '[終了 ' + (result.exitStatus == null ? '?' : result.exitStatus) + '] ' +
+          String(result.command || '') +
+          (result.output ? '\n' + clip(sanitizeUserFacingText(result.output), 5000) : '');
+      }).join('\n\n'));
+    }
     var turnLabel = 'ターン ' + escapeHtml(turn.turn || '?');
     var promptTime = turn.sentAt ? formatDate(turn.sentAt) : '';
     var responseTime = turn.responseReceivedAt ? formatDate(turn.responseReceivedAt) : '';
     var metadata = actions.length
-      ? '<details class="chat-meta"><summary>実行・変更の詳細</summary><pre>' +
-        escapeHtml(actions.join('\n\n')) + '</pre></details>'
+      ? '<details class="chat-meta"><summary><span>実行・変更の詳細</span><small>' +
+        actions.length + '項目</small></summary><pre>' +
+        escapeHtml(clip(sanitizeUserFacingText(actions.join('\n\n')), 16000)) + '</pre></details>'
       : '';
     return '<section class="chat-turn" aria-label="' + turnLabel + '">' +
       '<div class="chat-turn-label">' + turnLabel + '</div>' +
-      '<div class="chat-row chat-row-user"><div class="chat-message"><div class="chat-speaker">依頼・実行器</div>' +
+      '<div class="chat-row chat-row-user"><div class="chat-message"><div class="chat-speaker">依頼者 <span>あなた</span></div>' +
       '<div class="chat-bubble"><pre>' + escapeHtml(prompt || '記録はありません') + '</pre></div>' +
-      '<time>' + escapeHtml(promptTime) + '</time></div></div>' +
-      '<div class="chat-row chat-row-assistant"><div class="chat-message"><div class="chat-speaker">ChatGPT</div>' +
+      '<time>' + escapeHtml(promptTime) + '</time></div><span class="chat-avatar" aria-hidden="true">依</span></div>' +
+      '<div class="chat-row chat-row-assistant"><span class="chat-avatar" aria-hidden="true">AI</span><div class="chat-message"><div class="chat-speaker">ChatGPT <span>実行器</span></div>' +
       '<div class="chat-bubble"><pre>' + escapeHtml(response || '記録はありません') + '</pre></div>' +
       '<time>' + escapeHtml(responseTime) + '</time>' + metadata + '</div></div></section>';
   }).join('');
@@ -1066,8 +1113,12 @@ function conversationDetail(job) {
   if (!value) return '';
   var title = 'ChatGPTとの会話を表示';
   var key = job.id + ':' + title;
+  var isOpen = detailStates.has(key) ? detailStates.get(key) : true;
   return '<details class="conversation-details" data-detail-key="' + escapeHtml(key) + '"' +
-    (detailStates.get(key) ? ' open' : '') + '><summary>' + title +
+    (isOpen ? ' open' : '') + '><summary><span class="chat-summary-icon" aria-hidden="true">●</span>' +
+    '<span class="chat-summary-copy"><strong>依頼者 ↔ ChatGPT</strong><small>左右の吹き出しで会話を表示</small></span>' +
+    '<span class="chat-turn-count">' + job.conversationTurns.length + 'ターン</span>' +
+    '<span class="visually-hidden">' + title + '</span>' +
     '</summary><div class="chat-thread" role="log" aria-label="ChatGPTとの会話">' + value + '</div></details>';
 }
 
@@ -2079,12 +2130,42 @@ return redactSecrets(value)
 .trim();
 }
 
+function extractRequesterMessage(value) {
+let text = sanitizeUserFacingText(value);
+const marker = "\nTask instruction:\n";
+const markerIndex = text.lastIndexOf(marker);
+if (markerIndex >= 0) text = text.slice(markerIndex + marker.length);
+[
+"\n\nGIT AUTHORING CONTRACT:",
+"\n\nREQUEST-CONSOLE SPECIAL RULE:",
+"\n\nThis is an infrastructure retry."
+].forEach(function(stop) {
+const index = text.indexOf(stop);
+if (index >= 0) text = text.slice(0, index);
+});
+return compactText(text.trim(), 5000);
+}
+
+function extractAssistantMessage(value) {
+return compactText(sanitizeUserFacingText(value)
+.replace(/--- RESPONSE ---/g, "")
+.replace(/--- END ---/g, "")
+.replace(/===RUN:[\s\S]*?===/g, "")
+.replace(/===RUN===[\s\S]*?===ENDRUN===/g, "")
+.replace(/===PATCH===[\s\S]*?===ENDPATCH===/g, "")
+.replace(/===EDIT===[\s\S]*?===ENDEDIT===/g, "")
+.replace(/===REPLACE===[\s\S]*?===ENDREPLACE===/g, "")
+.replace(/===FILE(?::[^\n]*)?===[\s\S]*?===ENDFILE===/g, "")
+.replace(/===TASK_COMPLETE===/g, "")
+.trim(), 7000);
+}
+
 function renderConversationHtml(turns) {
 const values = Array.isArray(turns) ? turns.slice(-20) : [];
 if (!values.length) return "";
 return values.map(function(turn) {
-const prompt = compactText(sanitizeUserFacingText(turn.prompt), 5000);
-const response = compactText(sanitizeUserFacingText(turn.response), 7000);
+const prompt = extractRequesterMessage(turn.prompt);
+const response = extractAssistantMessage(turn.response);
 const actions = [];
 if (Array.isArray(turn.runCommands) && turn.runCommands.length) {
 actions.push("Ubuntuで実行したコマンド:\n" + turn.runCommands.join("\n"));
@@ -2094,20 +2175,36 @@ actions.push("変更対象のファイル:\n" + turn.fileChanges.map(function(ch
 return "- " + String(change.path || "");
 }).join("\n"));
 }
+if (Array.isArray(turn.commandResults) && turn.commandResults.length) {
+actions.push("コマンド結果:\n" + turn.commandResults.map(function(result) {
+const status = result.rejected ? "拒否" : result.timedOut ? "タイムアウト" :
+result.exitStatus == null ? "状態不明" : "終了 " + result.exitStatus;
+return "[" + status + "] " + String(result.command || "") +
+(result.output ? "\n" + compactText(sanitizeUserFacingText(result.output), 5000) : "");
+}).join("\n\n"));
+}
+if (Array.isArray(turn.checkResults) && turn.checkResults.length) {
+actions.push("検証結果:\n" + turn.checkResults.map(function(result) {
+return "[終了 " + (result.exitStatus == null ? "?" : result.exitStatus) + "] " +
+String(result.command || "") +
+(result.output ? "\n" + compactText(sanitizeUserFacingText(result.output), 5000) : "");
+}).join("\n\n"));
+}
 const turnLabel = "ターン " + escapeHtml(turn.turn || "?");
 const promptTime = turn.sentAt ? formatDateForDisplay(turn.sentAt) : "";
 const responseTime = turn.responseReceivedAt ? formatDateForDisplay(turn.responseReceivedAt) : "";
 const metadata = actions.length
-? '<details class="chat-meta"><summary>実行・変更の詳細</summary><pre>' +
-escapeHtml(actions.join("\n\n")) + "</pre></details>"
+? '<details class="chat-meta"><summary><span>実行・変更の詳細</span><small>' +
+actions.length + "項目</small></summary><pre>" +
+escapeHtml(compactText(sanitizeUserFacingText(actions.join("\n\n")), 16000)) + "</pre></details>"
 : "";
 return [
 '<section class="chat-turn" aria-label="', turnLabel, '">',
 '<div class="chat-turn-label">', turnLabel, "</div>",
-'<div class="chat-row chat-row-user"><div class="chat-message"><div class="chat-speaker">依頼・実行器</div>',
+'<div class="chat-row chat-row-user"><div class="chat-message"><div class="chat-speaker">依頼者 <span>あなた</span></div>',
 '<div class="chat-bubble"><pre>', escapeHtml(prompt || "記録はありません"), "</pre></div>",
-"<time>", escapeHtml(promptTime), "</time></div></div>",
-'<div class="chat-row chat-row-assistant"><div class="chat-message"><div class="chat-speaker">ChatGPT</div>',
+"<time>", escapeHtml(promptTime), '</time></div><span class="chat-avatar" aria-hidden="true">依</span></div>',
+'<div class="chat-row chat-row-assistant"><span class="chat-avatar" aria-hidden="true">AI</span><div class="chat-message"><div class="chat-speaker">ChatGPT <span>実行器</span></div>',
 '<div class="chat-bubble"><pre>', escapeHtml(response || "記録はありません"), "</pre></div>",
 "<time>", escapeHtml(responseTime), "</time>", metadata, "</div></div></section>"
 ].join("");
@@ -3057,8 +3154,11 @@ const title = "ChatGPTとの会話を表示";
 return [
 '<details class="conversation-details" data-detail-key="',
 escapeHtml(job.id + ":" + title),
-'">',
-"<summary>", title, "</summary>",
+'" open>',
+'<summary><span class="chat-summary-icon" aria-hidden="true">●</span>',
+'<span class="chat-summary-copy"><strong>依頼者 ↔ ChatGPT</strong><small>左右の吹き出しで会話を表示</small></span>',
+'<span class="chat-turn-count">', String(job.conversationTurns.length), 'ターン</span>',
+'<span class="visually-hidden">', title, '</span></summary>',
 '<div class="chat-thread" role="log" aria-label="ChatGPTとの会話">',
 value,
 "</div></details>"
@@ -3781,18 +3881,18 @@ function renderPage(jobs, message) {
     '.main{grid-column:2;min-width:0;padding:28px 32px 34px}.message{padding:10px 12px;border-radius:9px;background:#ecfdf3;color:#166534;border:1px solid #bbf7d0;margin-bottom:14px}',
     '.kpis{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin-bottom:24px}.kpi{position:relative;overflow:hidden;background:#fff;border:1px solid #e2e8f0;border-radius:14px;padding:17px 18px 16px;min-height:108px}.kpi::before{content:"";position:absolute;inset:0 auto 0 0;width:4px;background:var(--accent)}.kpi-label{font-size:.72rem;font-weight:750;color:#64748b}.kpi-value{display:block;font-size:1.8rem;line-height:1.1;margin-top:10px}.kpi-note{display:inline-flex;margin-top:9px;padding:5px 9px;border-radius:8px;background:var(--tint);color:var(--accent);font-size:.68rem;font-weight:700}',
     '.new-job-panel{background:#fff;border:1px solid #bfdbfe;border-radius:14px;padding:20px;margin-bottom:20px;box-shadow:0 18px 45px rgba(15,23,42,.08)}.new-job-panel[hidden]{display:none}.panel-heading{display:flex;align-items:flex-start;justify-content:space-between;gap:18px;margin-bottom:10px}.panel-heading h2{font-size:1.05rem;margin:0}.panel-heading p{color:#64748b;font-size:.78rem;margin:4px 0 0}.icon-button{border:0;background:transparent;color:#64748b;font-size:1.4rem;cursor:pointer;padding:0 6px}.new-job-form{display:grid;grid-template-columns:minmax(180px,.7fr) minmax(220px,1.3fr) auto;gap:12px;align-items:end}.field label{display:block;font-size:.72rem;font-weight:750;color:#475569;margin-bottom:6px}.field input,.field textarea,.field select{width:100%;border:1px solid #cbd5e1;border-radius:9px;padding:10px 11px;background:#fff;color:#0f172a}.field textarea{min-height:42px;max-height:140px;resize:vertical}.submit-field button{width:100%}',
-    '.workspace{display:grid;grid-template-columns:minmax(0,1.85fr) minmax(330px,.95fr);gap:16px;align-items:start}.queue-card,.detail-panel{background:#fff;border:1px solid #e2e8f0;border-radius:14px;overflow:hidden}.queue-toolbar{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:18px 20px}.queue-toolbar h2{font-size:1.1rem;margin:0}.queue-toolbar p{color:#64748b;font-size:.74rem;margin:3px 0 0}.filters{display:flex;align-items:end;gap:9px}.filters .field{min-width:140px}.filters .field:first-child{min-width:190px}.filters input,.filters select{padding:9px 10px}.result-count{font-size:.7rem;color:#64748b;white-space:nowrap;padding-bottom:10px}',
+    '.workspace{display:grid;grid-template-columns:minmax(0,1.5fr) minmax(440px,1.1fr);gap:16px;align-items:start}.queue-card,.detail-panel{background:#fff;border:1px solid #e2e8f0;border-radius:14px;overflow:hidden}.queue-toolbar{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:18px 20px}.queue-toolbar h2{font-size:1.1rem;margin:0}.queue-toolbar p{color:#64748b;font-size:.74rem;margin:3px 0 0}.filters{display:flex;align-items:end;gap:9px}.filters .field{min-width:140px}.filters .field:first-child{min-width:190px}.filters input,.filters select{padding:9px 10px}.result-count{font-size:.7rem;color:#64748b;white-space:nowrap;padding-bottom:10px}',
     '.job-table-header{display:grid;grid-template-columns:minmax(220px,2fr) minmax(110px,1fr) 118px 135px 92px;gap:12px;padding:12px 20px;background:#f8fafc;border-top:1px solid #eef2f7;border-bottom:1px solid #e2e8f0;color:#64748b;font-size:.62rem;font-weight:800;letter-spacing:.04em}.jobs{min-height:320px}.jobs>.job{margin:0;border:0;border-bottom:1px solid #e2e8f0;border-radius:0;background:#fff;padding:0;box-shadow:none;cursor:pointer;transition:background .15s ease}.jobs>.job:hover{background:#f8fafc}.jobs>.job.is-selected{background:#eff6ff}.jobs>.job:last-child{border-bottom:0}.jobs>.job>:not(.job-row-summary){display:none}.job-row-summary{display:grid;grid-template-columns:minmax(220px,2fr) minmax(110px,1fr) 118px 135px 92px;gap:12px;align-items:center;min-height:78px;padding:13px 20px;font-size:.72rem}.job-identity{min-width:0}.job-identity strong{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:.8rem;color:#0f172a}.job-identity small{display:block;margin-top:5px;color:#94a3b8;font-size:.64rem}.job-project,.job-worker,.job-updated{color:#475569;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.job-updated{color:#64748b}.job-state{justify-self:start;border-radius:999px;padding:5px 9px;font-size:.64rem;font-weight:750;white-space:nowrap}',
     '.stage-queued{background:#fef3c7;color:#92400e}.stage-sending_to_chatgpt,.stage-waiting_chatgpt{background:#dcfce7;color:#166534}.stage-executing_command,.stage-writing_file,.stage-verifying{background:#dbeafe;color:#1d4ed8}.stage-completed{background:#dcfce7;color:#166534}.stage-failed{background:#fee2e2;color:#b91c1c}.stage-stopped{background:#e2e8f0;color:#475569}.stage-blocked{background:#fef3c7;color:#92400e}',
     '.detail-panel{position:sticky;top:92px;max-height:calc(100dvh - 124px);overflow:auto;overscroll-behavior:contain}.mobile-detail-heading{display:none}.detail-empty{padding:48px 26px;text-align:center;color:#64748b}.detail-empty strong{display:block;color:#334155}.detail-empty p{font-size:.78rem}.detail-job{padding:20px}.detail-job>.job-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;border-bottom:1px solid #e2e8f0;padding-bottom:15px}.detail-job h3{font-size:1.05rem;margin:0}.detail-job .meta{font-size:.68rem;color:#94a3b8;overflow-wrap:anywhere}.detail-job .badges{display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end}.badge{display:inline-flex;border-radius:999px;padding:5px 9px;font-size:.66rem;font-weight:750;white-space:nowrap}.assignee-Ubuntu{background:#dbeafe;color:#1d4ed8}.assignee-ChatGPT{background:#dcfce7;color:#166534}.assignee-完了{background:#dcfce7;color:#166534}.assignee-失敗{background:#fee2e2;color:#b91c1c}.assignee-停止{background:#e2e8f0;color:#475569}.assignee-保留{background:#fef3c7;color:#92400e}.detail-job .facts{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin:12px 0}.detail-job .facts span{background:#f8fafc;border-radius:8px;padding:9px 10px;color:#64748b;font-size:.7rem}.detail-job .facts strong{display:block;color:#0f172a;font-size:.78rem;margin-top:2px}.detail-job .runtime{font-size:.68rem;color:#64748b;background:#f8fafc;padding:9px 10px;border-radius:8px;overflow-wrap:anywhere}.detail-job .recovery-info{margin-top:10px;padding:10px;border-left:3px solid #d97706;background:#fffbeb;color:#78350f;font-size:.72rem}.job-actions,.handoff-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}.job-actions button,.handoff-actions button{margin:0;border-radius:8px;padding:8px 11px;border:1px solid #cbd5e1;background:#fff;color:#334155;font-size:.7rem;font-weight:750;cursor:pointer}.job-actions button{background:#fef2f2;border-color:#fecaca;color:#b91c1c}.handoff-actions a,.job-download a{font-size:.7rem;font-weight:700;color:#1d4ed8;text-decoration:none}.handoff-actions span{font-size:.68rem;color:#166534}.job-download{margin-top:10px}',
     '.detail-job details{margin-top:10px;border:1px solid #e2e8f0;border-radius:9px;background:#fff;overflow:hidden}.detail-job summary{cursor:pointer;font-weight:750;font-size:.74rem;padding:10px 12px;list-style:none}.detail-job summary::-webkit-details-marker{display:none}.detail-job summary::after{content:"＋";float:right;color:#94a3b8}.detail-job details[open] summary::after{content:"−"}.detail-job pre{white-space:pre-wrap;word-break:break-word;margin:0;padding:11px 12px;border-top:1px solid #e2e8f0;background:#0f172a;color:#dbeafe;font:500 .7rem/1.55 ui-monospace,SFMono-Regular,Consolas,monospace}.result-details pre{max-block-size:min(56dvh,32rem);overflow:auto;overscroll-behavior:contain}.history-toolbar{display:flex;align-items:center;gap:7px;flex-wrap:wrap;padding:9px 11px;border-top:1px solid #e2e8f0;background:#f8fafc}.history-toolbar button{margin:0;padding:6px 9px;border:1px solid #cbd5e1;border-radius:7px;background:#fff;color:#334155;font-size:.66rem;font-weight:700}.history-status{font-size:.66rem;font-weight:700;color:#92400e}.history-log{display:block;max-block-size:min(48dvh,28rem);min-block-size:10rem;overflow:auto;overscroll-behavior:contain;white-space:pre-wrap;overflow-wrap:anywhere;word-break:break-word;user-select:text;cursor:text}',
-    '.detail-job{--job-detail-content-height:clamp(14rem,42dvh,22rem)}.detail-job .facts-explained{grid-template-columns:repeat(2,minmax(0,1fr))}.detail-job .facts-explained small{display:block;margin-top:5px;color:#64748b;font-size:.64rem;line-height:1.45}.detail-job>details>pre,.detail-job>details>.chat-thread{display:block;box-sizing:border-box;block-size:var(--job-detail-content-height);max-block-size:none;overflow:auto;overscroll-behavior:contain}.detail-job>details>.history-log{block-size:var(--job-detail-content-height);max-block-size:none;min-block-size:0}.chat-thread{padding:13px;background:#b7cbe0;border-top:1px solid #9fb5ca;scrollbar-gutter:stable}.chat-turn{display:grid;gap:10px;margin-bottom:18px}.chat-turn-label{justify-self:center;border-radius:999px;padding:4px 9px;background:rgba(15,23,42,.28);color:#fff;font-size:.62rem;font-weight:750}.chat-row{display:flex}.chat-row-user{justify-content:flex-end}.chat-row-assistant{justify-content:flex-start}.chat-message{display:flex;flex-direction:column;align-items:flex-start;max-width:86%;min-width:0}.chat-row-user .chat-message{align-items:flex-end}.chat-speaker{margin:0 6px 4px;color:#334155;font-size:.64rem;font-weight:800}.chat-bubble{position:relative;border-radius:15px;padding:9px 11px;background:#fff;box-shadow:0 1px 2px rgba(15,23,42,.14)}.chat-row-user .chat-bubble{background:#8de055;border-top-right-radius:4px}.chat-row-assistant .chat-bubble{border-top-left-radius:4px}.chat-bubble pre,.chat-meta pre{border:0!important;background:transparent!important;color:#0f172a!important;padding:0!important;font:500 .72rem/1.58 ui-monospace,SFMono-Regular,Consolas,monospace!important;white-space:pre-wrap;overflow-wrap:anywhere}.chat-message time{margin:4px 6px 0;color:#475569;font-size:.58rem}.chat-meta{align-self:stretch;margin-top:7px!important;border-color:rgba(51,65,85,.28)!important;background:rgba(255,255,255,.72)!important}.chat-meta summary{padding:7px 9px!important;font-size:.64rem!important}.chat-meta pre{max-height:12rem;overflow:auto;padding:8px 9px!important;border-top:1px solid rgba(51,65,85,.18)!important}.detail-job .conversation-details>summary{background:#eef6ff}',
+    '.visually-hidden{position:absolute!important;width:1px!important;height:1px!important;padding:0!important;margin:-1px!important;overflow:hidden!important;clip:rect(0,0,0,0)!important;white-space:nowrap!important;border:0!important}.detail-job{--job-detail-content-height:clamp(22rem,52dvh,31rem)}.detail-job .facts-explained{grid-template-columns:repeat(2,minmax(0,1fr))}.detail-job .facts-explained small{display:block;margin-top:5px;color:#64748b;font-size:.64rem;line-height:1.45}.detail-job>details>pre,.detail-job>details>.chat-thread{display:block;box-sizing:border-box;block-size:var(--job-detail-content-height);max-block-size:none;overflow:auto;overscroll-behavior:contain}.detail-job>details>.history-log{block-size:var(--job-detail-content-height);max-block-size:none;min-block-size:0}.detail-job .conversation-details{border:1px solid #8faac2;box-shadow:0 8px 24px rgba(30,64,91,.12)}.detail-job .conversation-details>summary{display:flex;align-items:center;gap:9px;min-height:58px;padding:10px 12px;background:#f7fbff;color:#17324a}.detail-job .conversation-details>summary::after{margin-left:4px}.chat-summary-icon{display:grid;place-items:center;flex:0 0 30px;width:30px;height:30px;border-radius:50%;background:#06c755;color:#fff;font-size:.65rem;box-shadow:0 0 0 4px #e6f8ed}.chat-summary-copy{display:flex;flex:1;min-width:0;flex-direction:column}.chat-summary-copy strong{font-size:.78rem}.chat-summary-copy small{margin-top:2px;color:#5d7183;font-size:.61rem;font-weight:600}.chat-turn-count{flex:0 0 auto;border-radius:999px;padding:4px 7px;background:#e4eef7;color:#33536e;font-size:.6rem;font-weight:800}.chat-thread{padding:16px 13px 22px;background-color:#b7cbe0;background-image:linear-gradient(135deg,rgba(255,255,255,.08) 25%,transparent 25%,transparent 75%,rgba(255,255,255,.08) 75%);background-size:24px 24px;border-top:1px solid #9fb5ca;scrollbar-gutter:stable}.chat-turn{display:grid;gap:13px;margin-bottom:22px}.chat-turn:last-child{margin-bottom:0}.chat-turn-label{justify-self:center;border-radius:999px;padding:4px 10px;background:rgba(34,57,78,.55);color:#fff;font-size:.6rem;font-weight:800;letter-spacing:.02em}.chat-row{display:flex;align-items:flex-start;gap:8px}.chat-row-user{justify-content:flex-end}.chat-row-assistant{justify-content:flex-start}.chat-avatar{display:grid;place-items:center;flex:0 0 30px;width:30px;height:30px;margin-top:19px;border-radius:50%;background:#fff;color:#35536e;border:1px solid rgba(53,83,110,.2);box-shadow:0 1px 3px rgba(15,23,42,.16);font-size:.62rem;font-weight:850}.chat-row-user .chat-avatar{background:#06c755;color:#fff;border-color:#05a947}.chat-message{display:flex;flex-direction:column;align-items:flex-start;max-width:78%;min-width:0}.chat-row-user .chat-message{align-items:flex-end}.chat-speaker{margin:0 8px 5px;color:#29465f;font-size:.65rem;font-weight:850}.chat-speaker span{margin-left:4px;color:#526b80;font-size:.58rem;font-weight:650}.chat-bubble{position:relative;min-width:48px;border-radius:17px;padding:10px 12px;background:#fff;box-shadow:0 1px 3px rgba(15,23,42,.16)}.chat-row-user .chat-bubble{background:#91e85f;border-top-right-radius:5px}.chat-row-assistant .chat-bubble{border-top-left-radius:5px}.chat-row-user .chat-bubble::after{content:"";position:absolute;top:0;right:-7px;border:0 solid transparent;border-top-width:11px;border-left:9px solid #91e85f}.chat-row-assistant .chat-bubble::before{content:"";position:absolute;top:0;left:-7px;border:0 solid transparent;border-top-width:11px;border-right:9px solid #fff}.chat-bubble pre,.chat-meta pre{border:0!important;background:transparent!important;color:#102235!important;padding:0!important;font:500 .75rem/1.65 Inter,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif!important;white-space:pre-wrap;overflow-wrap:anywhere;word-break:break-word;tab-size:2}.chat-message time{margin:4px 8px 0;color:#36546d;font-size:.56rem;font-weight:650}.chat-meta{align-self:stretch;margin-top:8px!important;border-color:rgba(51,83,110,.3)!important;background:rgba(247,251,255,.86)!important}.chat-meta summary{display:flex;justify-content:space-between;gap:8px;padding:8px 10px!important;font-size:.63rem!important;color:#29465f}.chat-meta summary small{color:#60778b;font-size:.58rem}.chat-meta pre{max-height:14rem;overflow:auto;padding:9px 10px!important;border-top:1px solid rgba(51,83,110,.18)!important;font-family:ui-monospace,SFMono-Regular,Consolas,monospace!important;font-size:.66rem!important}',
     '.queue-summary{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);clip-path:inset(50%);white-space:nowrap}.empty{padding:48px 20px;text-align:center;color:#64748b}',
     '.settings-area{margin-top:20px;display:grid;gap:12px}.settings-details{background:#fff;border:1px solid #e2e8f0;border-radius:12px;overflow:hidden}.settings-details>summary{display:flex;align-items:center;justify-content:space-between;min-height:52px;padding:15px 18px;font-size:.92rem;list-style:none}.settings-details>summary::-webkit-details-marker{display:none}.settings-details>summary::after{content:"＋"}.settings-details[open]>summary::after{content:"−"}.settings-content{padding:0 18px 18px}.project-grid{display:grid;gap:12px}.project-card{background:#f8fafc;border:1px solid #e2e8f0;border-radius:10px;padding:14px}.project-card-head{display:flex;justify-content:space-between;gap:12px}.project-card h3{margin:0;font-size:.88rem}.project-card a{color:#1d4ed8;font-weight:700}.project-facts{display:flex;gap:10px;flex-wrap:wrap;margin-top:8px;color:#64748b;font-size:.7rem}.project-note{margin-top:9px;padding:9px 10px;border-left:3px solid #16a34a;background:#f0fdf4;color:#166534;font-size:.7rem}.project-config-form{display:grid;gap:12px}.project-config-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}.project-config-form label{display:block;font-size:.7rem;font-weight:750;color:#475569;margin-bottom:5px}.project-config-form input,.project-config-form select{width:100%;border:1px solid #cbd5e1;border-radius:8px;padding:9px 10px}.project-git-box{border:1px solid #e2e8f0;border-radius:10px;padding:13px;background:#f8fafc}.checkbox-row{display:flex;gap:14px;flex-wrap:wrap}.checkbox-row label{display:inline-flex;align-items:center;gap:7px;margin:0}.checkbox-row input{width:auto}.helper{font-size:.72rem;color:#64748b}',
     '.footer{grid-column:2;display:flex;align-items:center;justify-content:space-between;padding:0 24px;background:#fff;border-top:1px solid #e2e8f0;color:#94a3b8;font-size:.62rem;position:sticky;bottom:0;z-index:14}',
-    '@media(max-width:1050px){.app-shell{grid-template-columns:76px minmax(0,1fr)}.brand{padding:0 4px 18px;text-align:center}.brand strong{font-size:.7rem}.brand span,.side-nav .nav-label,.server-status span{display:none}.side-nav a{justify-content:center;padding:0}.nav-mark{color:inherit}.server-status{padding:12px 8px}.server-status strong{justify-content:center;font-size:0}.topbar,.main{grid-column:2}.footer{grid-column:2}.topbar{padding:0 20px}.main{padding:22px 20px}.workspace{grid-template-columns:minmax(0,1.5fr) minmax(300px,1fr)}.kpis{grid-template-columns:repeat(2,minmax(0,1fr))}.job-table-header,.job-row-summary{grid-template-columns:minmax(190px,1.8fr) minmax(100px,1fr) 105px 110px}.job-table-header span:last-child,.job-updated{display:none}}',
+    '@media(max-width:1050px){.app-shell{grid-template-columns:76px minmax(0,1fr)}.brand{padding:0 4px 18px;text-align:center}.brand strong{font-size:.7rem}.brand span,.side-nav .nav-label,.server-status span{display:none}.side-nav a{justify-content:center;padding:0}.nav-mark{color:inherit}.server-status{padding:12px 8px}.server-status strong{justify-content:center;font-size:0}.topbar,.main{grid-column:2}.footer{grid-column:2}.topbar{padding:0 20px}.main{padding:22px 20px}.workspace{grid-template-columns:minmax(0,1.25fr) minmax(360px,1fr)}.kpis{grid-template-columns:repeat(2,minmax(0,1fr))}.job-table-header,.job-row-summary{grid-template-columns:minmax(190px,1.8fr) minmax(100px,1fr) 105px 110px}.job-table-header span:last-child,.job-updated{display:none}}',
     '@media(max-width:780px){.app-shell{display:block}.sidebar{height:auto;position:static;padding:12px}.brand{display:flex;justify-content:space-between;align-items:center;padding:0 4px 10px}.brand span{display:block}.side-nav{display:flex;overflow:auto;margin-top:7px}.side-nav a{min-width:max-content;padding:0 12px}.side-nav .nav-label{display:inline}.server-status{display:none}.topbar{position:sticky;height:auto;min-height:72px;padding:12px 14px;align-items:flex-start;flex-direction:column;gap:10px}.topbar p{display:none}.topbar-actions{width:100%;min-width:0;gap:7px}.top-search{width:auto;min-width:0;flex:1 1 auto}.topbar-actions .primary-button{flex:0 0 auto;white-space:nowrap;writing-mode:horizontal-tb}.main{padding:16px 12px}.kpis{grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}.kpi{min-height:94px;padding:14px}.workspace{display:block}.detail-panel{display:none}.detail-panel.is-mobile-open{display:block;position:fixed;inset:0;z-index:100;max-height:none;margin:0;border:0;border-radius:0;overflow:auto;background:#fff}.job-detail-open{overflow:hidden}.mobile-detail-heading{display:grid;position:sticky;top:0;z-index:5;grid-template-columns:1fr auto;align-items:center;gap:8px 12px;min-height:82px;padding:10px 14px;background:#eff6ff;border-bottom:1px solid #bfdbfe;box-shadow:0 2px 8px rgba(15,23,42,.08)}.mobile-detail-close{justify-self:start;min-height:40px;border:1px solid #93c5fd;border-radius:9px;padding:8px 12px;background:#fff;color:#1d4ed8;font-size:.76rem;font-weight:800}.mobile-detail-state{justify-self:end;border-radius:999px;padding:6px 10px;font-size:.7rem;white-space:nowrap}.mobile-detail-title{grid-column:1/-1;min-width:0}.mobile-detail-title small{display:block;color:#64748b;font-size:.62rem;font-weight:750}.mobile-detail-title strong{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#0f172a;font-size:.84rem}.detail-job{padding:16px 14px 32px}.queue-toolbar{display:block}.filters{margin-top:12px;flex-wrap:wrap}.filters .field,.filters .field:first-child{min-width:0;flex:1}.job-table-header{display:none}.job-row-summary{grid-template-columns:minmax(0,1fr) auto;gap:8px;min-height:82px}.job-project,.job-worker,.job-updated{display:none}.job-state{grid-column:2;grid-row:1}.new-job-form,.project-config-grid{grid-template-columns:1fr}.footer{position:static;padding:10px 14px;gap:10px;flex-wrap:wrap}.footer span:last-child{display:none}}',
-    '@media(max-width:780px){.detail-job{--job-detail-content-height:clamp(13rem,44dvh,20rem)}.detail-job .facts-explained{grid-template-columns:1fr}.chat-message{max-width:92%}.chat-thread{padding:10px}.chat-bubble{padding:8px 9px}}',
+    '@media(max-width:780px){.detail-job{--job-detail-content-height:clamp(22rem,58dvh,34rem)}.detail-job .facts-explained{grid-template-columns:1fr}.chat-message{max-width:calc(100% - 42px)}.chat-thread{padding:14px 10px 20px}.chat-bubble{padding:9px 10px}.chat-summary-copy small{display:none}}',
     "</style>",
     "</head>",
     "<body>",

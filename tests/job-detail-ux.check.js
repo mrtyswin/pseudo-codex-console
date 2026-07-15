@@ -6,7 +6,7 @@ const path = require("node:path");
 
 const source = fs.readFileSync(path.join(__dirname, "..", "app.js"), "utf8");
 
-assert.match(source, /--job-detail-content-height:clamp\(14rem,42dvh,22rem\)/);
+assert.match(source, /--job-detail-content-height:clamp\(22rem,52dvh,31rem\)/);
 assert.match(source, /\.detail-job>details>pre,[^']*block-size:var\(--job-detail-content-height\)/);
 assert.match(source, /function scrollDetailToBottom\(detailsNode\)/);
 assert.match(source, /detailViewStates = new Map\(\)/);
@@ -24,8 +24,21 @@ assert.match(source, /class=\"chat-row chat-row-user\"/);
 assert.match(source, /class=\"chat-row chat-row-assistant\"/);
 assert.match(source, /class=\"chat-bubble\"/);
 assert.match(source, /実行・変更の詳細/);
+assert.match(source, /function extractRequesterMessage\(value\)/);
+assert.match(source, /function extractAssistantMessage\(value\)/);
+assert.match(source, /\.replace\(\/===RUN:\[\\s\\S\]\*\?===\/g, \"\"\)/);
+assert.match(source, /\.replace\(\/===RUN===\[\\s\\S\]\*\?===ENDRUN===\/g, \"\"\)/);
+assert.match(source, /Array\.isArray\(turn\.commandResults\)/);
+assert.match(source, /Array\.isArray\(turn\.checkResults\)/);
+assert.match(source, /chat-avatar/);
+assert.match(source, /依頼者 ↔ ChatGPT/);
+assert.match(source, /左右の吹き出しで会話を表示/);
+assert.match(source, /class=\"conversation-details\"[^\n]+\n[^\n]+\n'\" open>'/);
 assert.match(source, /role=\"log\" aria-label=\"ChatGPTとの会話\"/);
 assert.match(source, /\.chat-row-user\{justify-content:flex-end\}/);
 assert.match(source, /\.chat-row-assistant\{justify-content:flex-start\}/);
+assert.match(source, /\.chat-row-user \.chat-bubble::after/);
+assert.match(source, /\.chat-row-assistant \.chat-bubble::before/);
+assert.match(source, /minmax\(440px,1\.1fr\)/);
 
 console.log("JOB_DETAIL_UX_OK");
