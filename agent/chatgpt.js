@@ -262,11 +262,24 @@ async function fillTextarea(page, text) {
 async function snapshotAssistantState(page) {
   return page.evaluate(() => {
     const msgs = document.querySelectorAll('[data-message-author-role="assistant"]');
+    const users = document.querySelectorAll('[data-message-author-role="user"]');
     return {
       count: msgs.length,
       lastText: msgs.length > 0 ? (msgs[msgs.length - 1].innerText || '').trim() : '',
+      userCount: users.length,
     };
   });
+}
+
+function responseAppearedAfterReload(beforeState, afterState) {
+  // A reload can reformat an existing assistant message and change innerText.
+  // Only accept that text change as a new response when the newly submitted
+  // user turn also survived the reload.
+  if (afterState.userCount <= beforeState.userCount) return false;
+  return (
+    afterState.count > beforeState.count ||
+    afterState.lastText !== beforeState.lastText
+  );
 }
 
 async function waitForStreamingDone(page, log, beforeState, timeoutMs = RESPONSE_TIMEOUT) {
@@ -401,6 +414,32 @@ async function throwIfUsageLimited(page, log) {
   throw new Error(`MODEL_USAGE_LIMIT: ${usageLimit}`);
 }
 
+async function reloadForRecovery(page, log) {
+  let reloadError = null;
+  try {
+    await page.reload({ waitUntil: 'domcontentloaded', timeout: 30_000 });
+  } catch (error) {
+    // ChatGPT can keep a navigation request pending even after the replacement
+    // document and composer are usable. Treat the composer as the real
+    // readiness signal, just as the normal navigation path does.
+    reloadError = error;
+    log(`Recovery reload did not settle: ${error.message}; checking the composer.`);
+  }
+
+  try {
+    await page.waitForSelector('#prompt-textarea', { timeout: 20_000 });
+  } catch (composerError) {
+    if (reloadError) {
+      throw new Error(
+        `Recovery reload failed and the ChatGPT composer did not return: ${reloadError.message}`,
+        { cause: composerError }
+      );
+    }
+    throw composerError;
+  }
+  await new Promise(resolve => setTimeout(resolve, 3_000));
+}
+
 async function waitWithRecovery(page, fullPrompt, log, beforeState, interact) {
   try {
     await waitForStreamingDone(page, log, beforeState, RESPONSE_TIMEOUT);
@@ -408,11 +447,7 @@ async function waitWithRecovery(page, fullPrompt, log, beforeState, interact) {
   } catch (initialError) {
     await throwIfUsageLimited(page, log);
     log(`No completed response after ${RESPONSE_TIMEOUT}ms; reloading the ChatGPT page once.`);
-    await interact(async () => {
-      await page.reload({ waitUntil: 'domcontentloaded', timeout: 30_000 });
-      await page.waitForSelector('#prompt-textarea', { timeout: 20_000 });
-      await new Promise(resolve => setTimeout(resolve, 3_000));
-    });
+    await interact(() => reloadForRecovery(page, log));
 
     await throwIfUsageLimited(page, log);
 
@@ -423,10 +458,7 @@ async function waitWithRecovery(page, fullPrompt, log, beforeState, interact) {
     }
 
     const stateAfterReload = await snapshotAssistantState(page);
-    if (
-      stateAfterReload.count > beforeState.count ||
-      stateAfterReload.lastText !== beforeState.lastText
-    ) {
+    if (responseAppearedAfterReload(beforeState, stateAfterReload)) {
       log('A response appeared after reload; waiting for completion.');
       await waitForStreamingDone(page, log, beforeState, RECOVERY_RESPONSE_TIMEOUT);
       return;
