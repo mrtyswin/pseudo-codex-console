@@ -107,7 +107,19 @@ lastError: "Cannot start: UBUNTU_WORKSPACE_NOT_ON_MAIN"
 assert.equal((await continuationsOf(signature.id)).length, 0,
 "preflight signature failure must not create a continuation job");
 
-// 3. A normal implementation failure must still create exactly one continuation.
+// 3. A model usage limit failure must not spawn continuations: they would
+// all hit the same exhausted limit.
+const usageLimit = await createJob("Usage limit " + token);
+await claim();
+const usageLimitFailed = await failJob(usageLimit.id, {
+lastError: "Model usage limit detected. Automatic retry is disabled."
+});
+assert.equal(usageLimitFailed.stage, "failed");
+assert.equal((await continuationsOf(usageLimit.id)).length, 0,
+"usage limit failure must not create a continuation job");
+assert.match(usageLimitFailed.autoHandoffStatus, /自動継続なし/);
+
+// 4. A normal implementation failure must still create exactly one continuation.
 const normal = await createJob("Normal failure " + token);
 await claim();
 const normalFailed = await failJob(normal.id, {
