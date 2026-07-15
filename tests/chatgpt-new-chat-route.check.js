@@ -77,19 +77,24 @@ const usageDetectionSource = source.slice(
 const usageDetection = new Function(
   `${usageDetectionSource}\nreturn { findUsageLimitText, detectUsageLimit };`
 )();
-assert.match(
-  usageDetection.findUsageLimitText(["You have reached the usage limit. Try again later."]),
-  /usage limit/i
-);
+const hardLimit = usageDetection.findUsageLimitText([
+  "You have reached the usage limit. It resets at 5:00 PM.",
+]);
+assert.equal(hardLimit.kind, "limit", "an exhausted account limit is terminal");
+assert.match(hardLimit.text, /usage limit/i);
+const throttle = usageDetection.findUsageLimitText([
+  "Too many requests You’re making requests too quickly. We’ve temporarily limited access to your conversations to protect your data. Please wait a few minutes before trying again. Got it",
+]);
+assert.equal(throttle.kind, "throttle", "a transient request throttle must be retryable, not terminal");
 assert.equal(
   usageDetection.findUsageLimitText(["Ordinary conversation without a system notice."]),
-  ""
+  null
 );
 (async () => {
   const fromConversationOnly = await usageDetection.detectUsageLimit({
     evaluate: async () => [],
   });
-  assert.equal(fromConversationOnly, "", "conversation history is not a usage-limit signal");
+  assert.equal(fromConversationOnly, null, "conversation history is not a usage-limit signal");
 })();
 
 const loadRecoveryReload = new Function(

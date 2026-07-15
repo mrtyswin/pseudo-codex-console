@@ -378,28 +378,49 @@ async function pageIsStreaming(page) {
 }
 
 function findUsageLimitText(candidates) {
-  const patterns = [
-    /usage limit/i,
-    /rate limit/i,
-    /token limit/i,
-    /limit reached/i,
-    /try again later/i,
-    /reset(?:s)? at/i,
-    /upgrade to continue/i,
-    /too many requests/i,
-    /temporarily limited access/i,
-    /wait a few minutes/i,
-    /利用上限/,
-    /制限に達し/,
+  // Two very different situations share similar banners. A hard account limit
+  // ("resets at", "upgrade to continue") cannot be waited out within a job. A
+  // transient request throttle ("too many requests", "wait a few minutes") is
+  // dismissible and clears after a short pause; treating it as a hard limit
+  // killed healthy jobs in production.
+  const groups = [
+    {
+      kind: 'limit',
+      patterns: [
+        /usage limit/i,
+        /token limit/i,
+        /limit reached/i,
+        /reset(?:s)? at/i,
+        /upgrade to continue/i,
+        /利用上限/,
+        /制限に達し/,
+      ],
+    },
+    {
+      kind: 'throttle',
+      patterns: [
+        /too many requests/i,
+        /requests too quickly/i,
+        /temporarily limited access/i,
+        /rate limit/i,
+        /wait a few minutes/i,
+        /try again later/i,
+      ],
+    },
   ];
   for (const candidate of Array.isArray(candidates) ? candidates : []) {
     const text = String(candidate || '').replace(/\s+/g, ' ').trim();
-    const match = patterns.find(pattern => pattern.test(text));
-    if (!match) continue;
-    const index = text.search(match);
-    return text.slice(Math.max(0, index - 120), index + 500);
+    for (const group of groups) {
+      const match = group.patterns.find(pattern => pattern.test(text));
+      if (!match) continue;
+      const index = text.search(match);
+      return {
+        kind: group.kind,
+        text: text.slice(Math.max(0, index - 120), index + 500),
+      };
+    }
   }
-  return '';
+  return null;
 }
 
 async function detectUsageLimit(page) {
@@ -424,18 +445,45 @@ async function detectUsageLimit(page) {
   return findUsageLimitText(candidates);
 }
 
-async function throwIfUsageLimited(page, log) {
-  const usageLimit = await detectUsageLimit(page);
-  if (!usageLimit) return;
+async function dismissLimitNotice(page) {
   await page.evaluate(() => {
-    const dialog = document.querySelector('[role="dialog"]');
-    const button = dialog && [...dialog.querySelectorAll('button')].find(item =>
-      /^(got it|ok|閉じる|了解)$/i.test((item.textContent || '').trim())
-    );
-    if (button) button.click();
+    const containers = [...document.querySelectorAll('[role="dialog"], [role="alert"]')];
+    for (const container of containers) {
+      const button = [...container.querySelectorAll('button')].find(item =>
+        /^(got it|ok|閉じる|了解)$/i.test((item.textContent || '').trim())
+      );
+      if (button) {
+        button.click();
+        return;
+      }
+    }
   }).catch(() => {});
-  log(`Model usage/request limit detected: ${usageLimit.slice(0, 300)}`);
-  throw new Error(`MODEL_USAGE_LIMIT: ${usageLimit}`);
+}
+
+const THROTTLE_RETRY_LIMIT = Number.parseInt(process.env.PSEUDO_CODEX_THROTTLE_RETRIES || '3', 10);
+const THROTTLE_WAIT_MS = Number.parseInt(process.env.PSEUDO_CODEX_THROTTLE_WAIT_MS || '120000', 10);
+
+async function throwIfUsageLimited(page, log) {
+  let detected = await detectUsageLimit(page);
+  if (!detected) return;
+  for (let attempt = 1; detected && detected.kind === 'throttle'; attempt += 1) {
+    await dismissLimitNotice(page);
+    if (attempt > THROTTLE_RETRY_LIMIT) {
+      throw new Error(
+        `CHATGPT_THROTTLED: request throttle persisted after ${THROTTLE_RETRY_LIMIT} waits: ${detected.text}`
+      );
+    }
+    log(
+      `ChatGPT request throttle detected; waiting ${Math.round(THROTTLE_WAIT_MS / 1000)}s ` +
+      `before continuing (attempt ${attempt}/${THROTTLE_RETRY_LIMIT}).`
+    );
+    await new Promise(resolve => setTimeout(resolve, THROTTLE_WAIT_MS));
+    detected = await detectUsageLimit(page);
+  }
+  if (!detected) return;
+  await dismissLimitNotice(page);
+  log(`Model usage limit detected: ${detected.text.slice(0, 300)}`);
+  throw new Error(`MODEL_USAGE_LIMIT: ${detected.text}`);
 }
 
 async function reloadForRecovery(page, log) {
