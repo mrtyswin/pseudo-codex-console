@@ -1034,10 +1034,10 @@ function conversationHtml(turns) {
       : '';
     return '<section class="chat-turn" aria-label="' + turnLabel + '">' +
       '<div class="chat-turn-label">' + turnLabel + '</div>' +
-      '<div class="chat-row chat-row-user"><div class="chat-message"><div class="chat-speaker">依頼者 <span>あなた</span></div>' +
+      '<div class="chat-row chat-row-user"><span class="chat-avatar" aria-hidden="true">依</span><div class="chat-message"><div class="chat-speaker">依頼者 <span>あなた</span><time>' + escapeHtml(promptTime) + '</time></div>' +
       '<div class="chat-bubble"><pre>' + escapeHtml(prompt || '記録はありません') + '</pre></div>' +
-      '<time>' + escapeHtml(promptTime) + '</time></div><span class="chat-avatar" aria-hidden="true">依</span></div><div class="chat-row chat-row-assistant"><span class="chat-avatar" aria-hidden="true">AI</span><div class="chat-message"><div class="chat-speaker">ChatGPT <span>実行器</span></div>' +
-      '<div class="chat-bubble"><pre>' + escapeHtml(response || '記録はありません') + '</pre></div><time>' + escapeHtml(responseTime) + '</time>' +
+      '</div></div><div class="chat-row chat-row-assistant"><span class="chat-avatar" aria-hidden="true">AI</span><div class="chat-message"><div class="chat-speaker">ChatGPT <span>実行器</span><time>' + escapeHtml(responseTime) + '</time></div>' +
+      '<div class="chat-bubble"><pre>' + escapeHtml(response || '記録はありません') + '</pre></div>' +
       metadata + '</div></div></section>';
   }).join('');
 }
@@ -1113,9 +1113,9 @@ function conversationDetail(job) {
   var title = 'ChatGPTとの会話を表示';
   var key = job.id + ':' + title;
   var isOpen = detailStates.has(key) ? detailStates.get(key) : true;
-  return '<details class="conversation-details" data-conversation-style="line" data-detail-key="' + escapeHtml(key) + '"' +
-    (isOpen ? ' open' : '') + '><summary><span class="chat-summary-icon" aria-hidden="true">会</span>' +
-    '<span class="chat-summary-copy"><strong>依頼者 ↔ ChatGPT</strong><small>LINE風の左右吹き出しで会話を表示</small></span>' +
+  return '<details class="conversation-details" data-conversation-style="slack" data-detail-key="' + escapeHtml(key) + '"' +
+    (isOpen ? ' open' : '') + '><summary><span class="chat-summary-icon" aria-hidden="true">#</span>' +
+    '<span class="chat-summary-copy"><strong>依頼者 ↔ ChatGPT</strong><small>Slack風のスレッドで会話を表示</small></span>' +
     '<span class="chat-turn-count">' + job.conversationTurns.length + 'ターン</span>' +
     '<span class="visually-hidden">' + title + '</span>' +
     '</summary><div class="chat-thread" role="log" aria-label="ChatGPTとの会話">' + value + '</div></details>';
@@ -2200,10 +2200,10 @@ escapeHtml(compactText(sanitizeUserFacingText(actions.join("\n\n")), 16000)) + "
 return [
 '<section class="chat-turn" aria-label="', turnLabel, '">',
 '<div class="chat-turn-label">', turnLabel, "</div>",
-'<div class="chat-row chat-row-user"><div class="chat-message"><div class="chat-speaker">依頼者 <span>あなた</span></div>',
-'<div class="chat-bubble"><pre>', escapeHtml(prompt || "記録はありません"), "</pre></div><time>", escapeHtml(promptTime), '</time></div><span class="chat-avatar" aria-hidden="true">依</span></div>',
-'<div class="chat-row chat-row-assistant"><span class="chat-avatar" aria-hidden="true">AI</span><div class="chat-message"><div class="chat-speaker">ChatGPT <span>実行器</span></div>',
-'<div class="chat-bubble"><pre>', escapeHtml(response || "記録はありません"), "</pre></div><time>", escapeHtml(responseTime), "</time>",
+'<div class="chat-row chat-row-user"><span class="chat-avatar" aria-hidden="true">依</span><div class="chat-message"><div class="chat-speaker">依頼者 <span>あなた</span><time>', escapeHtml(promptTime), "</time></div>",
+'<div class="chat-bubble"><pre>', escapeHtml(prompt || "記録はありません"), "</pre></div></div></div>",
+'<div class="chat-row chat-row-assistant"><span class="chat-avatar" aria-hidden="true">AI</span><div class="chat-message"><div class="chat-speaker">ChatGPT <span>実行器</span><time>', escapeHtml(responseTime), "</time></div>",
+'<div class="chat-bubble"><pre>', escapeHtml(response || "記録はありません"), "</pre></div>",
 metadata, "</div></div></section>"
 ].join("");
 }).join("");
@@ -3150,11 +3150,11 @@ const value = renderConversationHtml(job.conversationTurns);
 if (!value) return "";
 const title = "ChatGPTとの会話を表示";
 return [
-'<details class="conversation-details" data-conversation-style="line" data-detail-key="',
+'<details class="conversation-details" data-conversation-style="slack" data-detail-key="',
 escapeHtml(job.id + ":" + title),
 '" open>',
-'<summary><span class="chat-summary-icon" aria-hidden="true">会</span>',
-'<span class="chat-summary-copy"><strong>依頼者 ↔ ChatGPT</strong><small>LINE風の左右吹き出しで会話を表示</small></span>',
+'<summary><span class="chat-summary-icon" aria-hidden="true">#</span>',
+'<span class="chat-summary-copy"><strong>依頼者 ↔ ChatGPT</strong><small>Slack風のスレッドで会話を表示</small></span>',
 '<span class="chat-turn-count">', String(job.conversationTurns.length), 'ターン</span>',
 '<span class="visually-hidden">', title, '</span></summary>',
 '<div class="chat-thread" role="log" aria-label="ChatGPTとの会話">',
@@ -3904,7 +3904,7 @@ function renderPage(jobs, message) {
     '<a href="#projects-section"><span class="nav-mark">◇</span><span class="nav-label">プロジェクト</span></a>',
     '<a href="#settings-section"><span class="nav-mark">⚙</span><span class="nav-label">設定</span></a>',
     "</nav>",
-    '<div class="server-status"><strong><span class="online-dot"></span>System online</strong><span>Ubuntu / ChatGPT dispatcher</span><span>Port 8090 · v0.1.2</span></div>',
+    '<div class="server-status"><strong><span class="online-dot"></span>System online</strong><span>Ubuntu / ChatGPT dispatcher</span><span>Port 8090 · v0.1.3</span></div>',
     "</aside>",
     '<header class="topbar">',
     '<div><h1>Operations overview</h1><p>ChatGPTとUbuntuの処理状況をリアルタイム監視</p></div>',
@@ -3948,7 +3948,7 @@ function renderPage(jobs, message) {
     '<details class="settings-details" id="settings-section"><summary>プロジェクトを追加・更新</summary><div class="settings-content"><p class="helper">既存の設定項目と保存処理は変更していません。</p>', renderProjectConfigForm(), "</div></details>",
     "</section>",
     "</main>",
-    '<footer class="footer"><span>Pseudo Codex Console v0.1.2</span><span>3秒ごとに更新 · JST表示</span></footer>',
+    '<footer class="footer"><span>Pseudo Codex Console v0.1.3</span><span>3秒ごとに更新 · JST表示</span></footer>',
     "</div>",
     CLIENT_SCRIPT_TAG,
     CONSOLE_UI_SCRIPT,
