@@ -449,12 +449,20 @@ async function navigateWithRetry(page, targetUrl, log) {
   const safeUrl = String(targetUrl || CHATGPT_URL).startsWith('https://chatgpt.com')
     ? String(targetUrl || CHATGPT_URL)
     : CHATGPT_URL;
+  const navigateToComposer = async () => {
+    // ChatGPT keeps background connections open, so network-idle is not a
+    // reliable readiness signal. The composer is the actual UI prerequisite.
+    await page.goto(safeUrl, { waitUntil: 'domcontentloaded', timeout: 30_000 });
+    if (!browserClient) {
+      await page.waitForSelector('#prompt-textarea', { timeout: 20_000 });
+    }
+  };
   try {
-    await page.goto(safeUrl, { waitUntil: 'networkidle2', timeout: 30_000 });
+    await navigateToComposer();
   } catch (initialError) {
     log(`Navigation failed once for ${safeUrl}: ${initialError.message}; retrying once.`);
     await page.reload({ waitUntil: 'domcontentloaded', timeout: 30_000 }).catch(() => {});
-    await page.goto(safeUrl, { waitUntil: 'networkidle2', timeout: 30_000 });
+    await navigateToComposer();
   }
 }
 

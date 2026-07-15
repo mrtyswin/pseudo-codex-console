@@ -28,5 +28,12 @@ assert.match(source, /too many requests/i);
 assert.match(source, /temporarily limited access/i);
 assert.match(source, /wait a few minutes/i);
 assert.match(source, /await throwIfUsageLimited\(page, log\)/);
+assert.match(source, /waitUntil: 'domcontentloaded'/);
+assert.match(source, /waitForSelector\('#prompt-textarea', \{ timeout: 20_000 \}\)/);
+const navigationSource = source.slice(
+  source.indexOf("async function navigateWithRetry"),
+  source.indexOf("function conversationDetails")
+);
+assert.doesNotMatch(navigationSource, /waitUntil: 'networkidle2'/);
 
 console.log("CHATGPT_NEW_CHAT_ROUTE_OK");
