@@ -541,7 +541,10 @@ function parseRunBlocks(response) {
   response = String(response || '').replace(/\r\n?/g, '\n');
   const commands = [];
   const blockRegex = /===RUN===\n([\s\S]*?)\n===ENDRUN===/g;
-  const inlineRegex = /===RUN:\s*([^\n=][^\n]*)===/g;
+  // Stop at the first closing delimiter. ChatGPT sometimes emits the hybrid
+  // one-line form `===RUN: command===ENDRUN===`; a greedy match used to append
+  // `===ENDRUN` to the shell command and turn valid inspection into a failure.
+  const inlineRegex = /===RUN:\s*([^\n=][^\n]*?)===/g;
   let match;
   while ((match = blockRegex.exec(response)) !== null) {
     const command = match[1].replace(/^\n|\n$/g, '');

@@ -10,6 +10,18 @@ const agentPath = process.env.AGENT_PATH ||
   path.join(__dirname, "..", "agent", "agent.js");
 assert.ok(fs.existsSync(agentPath), "agent.js was not found: " + agentPath);
 
+const { parseRunBlocks } = require(agentPath);
+assert.deepEqual(
+  parseRunBlocks("===RUN: printf ok===ENDRUN==="),
+  ["printf ok"],
+  "hybrid inline RUN must not leak ENDRUN into the command"
+);
+assert.deepEqual(
+  parseRunBlocks("===RUN: printf ok==="),
+  ["printf ok"],
+  "ordinary inline RUN must remain supported"
+);
+
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "pseudo-codex-controller-check-"));
 const workspace = path.join(root, "workspace");
 const sessionFile = path.join(root, "session", "chat.url");
