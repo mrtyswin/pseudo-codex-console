@@ -134,6 +134,42 @@ def main() -> None:
         if workspace.exists():
             raise AssertionError("completed worktree was not removed")
 
+        dispatcher.PROJECT_CONFIGS["fixture-project"]["git"]["workspaceMode"] = "primary"
+        primary_job = {
+            "id": "33333333-4444-4555-8666-777777777777",
+            "project": "fixture-project",
+            "title": "Primary workspace publishing check",
+        }
+        primary_workspace, primary_context = dispatcher.prepare_job_workspace(
+            primary_job, source.resolve()
+        )
+        if primary_workspace != source.resolve() or primary_context is None:
+            raise AssertionError("primary mode did not use the canonical Ubuntu workspace")
+        if primary_context.get("mode") != "primary":
+            raise AssertionError(primary_context)
+        primary_task = dispatcher.task_for(
+            primary_job,
+            dispatcher.get_project_config("fixture-project"),
+            primary_workspace,
+        )
+        if "directly in the canonical Ubuntu Git workspace" not in primary_task:
+            raise AssertionError(primary_task)
+        if dispatcher.project_allows_parallel("fixture-project"):
+            raise AssertionError("primary workspace project must be serialized")
+        (primary_workspace / "app.js").write_text("module.exports = 'primary';\n", encoding="utf-8")
+        primary_ok, primary_detail = dispatcher.publish_git_changes(
+            primary_job, primary_context
+        )
+        if not primary_ok:
+            raise AssertionError(primary_detail)
+        if git(remote, "show", "main:app.js") != "module.exports = 'primary';":
+            raise AssertionError("primary workspace change did not reach remote main")
+        dispatcher.cleanup_git_worktree(primary_context)
+        if not source.exists():
+            raise AssertionError("primary workspace cleanup removed the canonical workspace")
+
+        dispatcher.PROJECT_CONFIGS["fixture-project"]["git"]["workspaceMode"] = "worktree"
+
         dirty_job = {
             "id": "22222222-3333-4444-8555-666666666666",
             "project": "fixture-project",

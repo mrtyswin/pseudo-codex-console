@@ -54,6 +54,26 @@ with tempfile.TemporaryDirectory() as temporary:
     launcher.chmod(0o755)
     assert module.verify_agent_launcher() == launcher.resolve()
 
+    verify_script = root / "verify-live.js"
+    verify_script.write_text("console.log('VERIFY_SCRIPT_OK');\n", encoding="utf-8")
+    verify_script.chmod(0o644)
+    assert module.configured_command_argv(str(verify_script)) == ["node", str(verify_script)]
+
+    module.update_progress = lambda *args, **kwargs: None
+    module.time.sleep = lambda _seconds: None
+    deploy_ok, deploy_detail = module.run_auto_deploy(
+        {"id": "deploy-launch-failure", "project": "request-console"},
+        workspace,
+        "session",
+        123,
+        {
+            "requiresDeployment": True,
+            "deployCommand": str(root / "missing-deploy-command"),
+        },
+    )
+    assert deploy_ok is False
+    assert "launch failed" in deploy_detail
+
     job_workspace, git_context = module.prepare_job_workspace(
         {"id": "host-native", "project": "request-console"},
         resolved,
@@ -73,6 +93,7 @@ with tempfile.TemporaryDirectory() as temporary:
     assert '"--host-native"' in source
     assert "AUTO_DEPLOY_SKIPPED_NO_CHANGES" in source
     assert "AGENT_LAUNCHER_NOT_EXECUTABLE" in source
+    assert "configured_command_argv(verify_command)" in source
     assert module.agent_marker(
         'ordinary output\n===AGENT_BLOCKED==={"reason":"turn budget","errorClass":"turn_budget"}',
         module.BLOCKED_MARKER,

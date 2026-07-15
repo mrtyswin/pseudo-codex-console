@@ -8,7 +8,7 @@
     "start": "node app.js",
     "check": "npm run check:console && npm run check:agent && npm run check:dispatcher",
     "check:console": "node check.js && node tests/deploy-restart.check.js",
-    "check:agent": "node tests/agent-no-sha.check.js && node tests/agent-controller.check.js && node tests/chatgpt-parallel.check.js && node tests/chatgpt-new-chat-route.check.js && node tests/settings-details.check.js && node tests/agent-github-direct.check.js && node tests/agent-verify-only.check.js && node tests/agent-host-native.check.js && node tests/agent-terminal-owner.check.js",
+    "check:agent": "node tests/agent-no-sha.check.js && node tests/agent-malformed-edit.check.js && node tests/agent-controller.check.js && node tests/chatgpt-parallel.check.js && node tests/chatgpt-new-chat-route.check.js && node tests/settings-details.check.js && node tests/agent-github-direct.check.js && node tests/agent-verify-only.check.js && node tests/agent-host-native.check.js && node tests/agent-terminal-owner.check.js",
     "check:dispatcher": "python3 tests/dispatcher-git.check.py && python3 tests/dispatcher-github-direct.check.py && python3 tests/dispatcher-config-reload.check.py && python3 tests/dispatcher-host-native.check.py && python3 tests/dispatcher-parallel.check.py && python3 tests/browser-restart-safety.check.py",
     "check:syntax": "node --check app.js && node --check agent/agent.js && node --check agent/chatgpt.js && node --check agent/fake-browser-client.js && node --check agent/mcp-server.js"
   },
