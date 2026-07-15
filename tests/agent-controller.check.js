@@ -9,6 +9,12 @@ const path = require("node:path");
 const agentPath = process.env.AGENT_PATH ||
   path.join(__dirname, "..", "agent", "agent.js");
 assert.ok(fs.existsSync(agentPath), "agent.js was not found: " + agentPath);
+const agentSource = fs.readFileSync(agentPath, "utf8");
+assert.match(
+  agentSource,
+  /CHATGPT_REQUEST_TIMEOUT_MS \|\| '300000'/,
+  "outer request timeout must cover the browser recovery window"
+);
 
 const { parseRunBlocks } = require(agentPath);
 assert.deepEqual(

@@ -50,7 +50,8 @@ const GITHUB_COMPLETE_START = '===GITHUB_COMPLETE===';
 const GITHUB_COMPLETE_END = '===END_GITHUB_COMPLETE===';
 const GITHUB_DIRECT_MAX_TURNS = Number.parseInt(process.env.PSEUDO_CODEX_GITHUB_DIRECT_MAX_TURNS || '10', 10);
 const CHATGPT_REQUEST_TIMEOUT_MS = Number.parseInt(
-  process.env.CHATGPT_REQUEST_TIMEOUT_MS || '180000',
+  // Must exceed browser navigation retry plus response reload/resubmit recovery.
+  process.env.CHATGPT_REQUEST_TIMEOUT_MS || '300000',
   10
 );
 const COMMAND_OUTPUT_LIMIT = Number.parseInt(
