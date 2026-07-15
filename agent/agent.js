@@ -941,7 +941,10 @@ async function applyPatches(patches, cwd) {
     const patchPath = path.join(directory, 'change.diff');
     try {
       fs.writeFileSync(patchPath, content + '\n', { encoding: 'utf8', mode: 0o600 });
-      const check = spawnSync('git', ['apply', '--check', '--whitespace=nowarn', patchPath], {
+      // --recount: ChatGPT reliably miscounts @@ hunk line counts, which git
+      // rejects as "corrupt patch" before even looking at the file. Recounting
+      // from the hunk body leaves only genuine context mismatches as failures.
+      const check = spawnSync('git', ['apply', '--check', '--recount', '--whitespace=nowarn', patchPath], {
         cwd, encoding: 'utf8', timeout: 60_000,
       });
       if (check.status !== 0) {
@@ -952,7 +955,7 @@ async function applyPatches(patches, cwd) {
         });
         continue;
       }
-      const applied = spawnSync('git', ['apply', '--whitespace=nowarn', patchPath], {
+      const applied = spawnSync('git', ['apply', '--recount', '--whitespace=nowarn', patchPath], {
         cwd, encoding: 'utf8', timeout: 60_000,
       });
       const output = compactOutput((applied.stdout || '') + (applied.stderr || '')).trim() || 'Patch applied.';
