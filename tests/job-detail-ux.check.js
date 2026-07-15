@@ -46,4 +46,13 @@ assert.match(source, /\[data-conversation-style="slack"\] \.chat-avatar\{[^}]*bo
 assert.match(source, /\[data-conversation-style="slack"\] \.chat-bubble,[^}]*background:transparent;box-shadow:none/);
 assert.match(source, /minmax\(440px,1\.1fr\)/);
 
+assert.ok(source.includes(".chat-row-user{justify-content:flex-end}"));
+assert.ok(source.includes(".chat-row-assistant{justify-content:flex-start}"));
+assert.ok(source.includes(".chat-row-user .chat-avatar{background:#06c755"));
+assert.ok(source.includes("border-radius:50%;background:#fff"));
+assert.ok(source.includes(".chat-row-user .chat-bubble{background:#91e85f"));
+assert.ok(source.includes('.chat-row-user .chat-bubble::after{content:"";position:absolute;top:0;right:-7px'));
+assert.ok(source.includes('.chat-row-assistant .chat-bubble::before{content:"";position:absolute;top:0;left:-7px'));
+assert.ok(source.includes(".chat-thread{padding:16px 13px 22px;background-color:#b7cbe0;background-image:linear-gradient"));
+
 console.log("JOB_DETAIL_UX_OK");
