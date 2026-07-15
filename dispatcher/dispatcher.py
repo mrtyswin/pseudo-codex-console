@@ -672,6 +672,48 @@ def sync_workspace_to_origin_main(project_name: str, workspace: Path) -> tuple[b
     )
 
 
+def quarantine_primary_workspace(job_id: str, git_context: dict[str, Any] | None) -> str:
+    """Return the canonical primary workspace to a clean state after a job ends
+    without a successful publish.
+
+    Abandoned changes are preserved twice (a patch file under STATE_DIR and a
+    git stash entry) so nothing is silently discarded, while the next job's
+    clean-workspace preflight can pass again."""
+    if not git_context or git_context.get("mode") != "primary":
+        return ""
+    workspace = Path(git_context["worktree"])
+    status = run_git(workspace, ["status", "--porcelain=v1", "--untracked-files=all"])
+    if status.returncode != 0:
+        return "PRIMARY_QUARANTINE_STATUS_FAILED: " + git_error(status)
+    if not status.stdout.strip():
+        return "PRIMARY_WORKSPACE_CLEAN"
+    quarantine_dir = STATE_DIR / "quarantine"
+    quarantine_dir.mkdir(parents=True, exist_ok=True)
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    patch_path = quarantine_dir / f"{job_id}-{stamp}.patch"
+    diff = run_git(workspace, ["diff", "HEAD"])
+    patch_path.write_text(
+        f"# pseudo-codex quarantine job={job_id}\n# git status:\n"
+        + "".join("# " + line + "\n" for line in status.stdout.splitlines())
+        + (diff.stdout or ""),
+        encoding="utf-8",
+    )
+    stash = run_git(
+        workspace,
+        ["stash", "push", "--include-untracked", "-m", f"pseudo-codex quarantine job={job_id}"],
+    )
+    if stash.returncode != 0:
+        return f"PRIMARY_QUARANTINE_STASH_FAILED: {git_error(stash)}; patch saved: {patch_path}"
+    ready, ready_detail = validate_primary_workspace(
+        workspace, str(git_context.get("baseBranch", "main"))
+    )
+    workspace_state = "clean" if ready else "STILL_DIRTY: " + ready_detail
+    return (
+        f"PRIMARY_WORKSPACE_QUARANTINED job={job_id} stash=saved patch={patch_path} "
+        f"workspace={workspace_state}"
+    )
+
+
 def cleanup_git_worktree(context: dict[str, Any] | None) -> None:
     if context is None or "worktree" not in context or context.get("mode") == "primary":
         return
@@ -815,6 +857,7 @@ def update_result(
     verification_result: str | None = None,
     session_id: str = "",
     pid: int | None = None,
+    preflight: bool = False,
 ) -> None:
     path = "/api/jobs/" + parse.quote(job_id, safe="") + "/result"
     current = get_job(job_id) or {}
@@ -835,6 +878,7 @@ def update_result(
             "workerId": WORKER_ID,
             "sessionId": session_id,
             "pid": pid,
+            "preflight": preflight,
         },
     )
 
@@ -1107,7 +1151,13 @@ def run_job(job: dict[str, Any]) -> None:
         cwd, git_context = prepare_job_workspace(job, source_workspace, project_config)
         ensure_host_native_workspace(cwd)
     except Exception as exc:
-        update_result(job_id, "needs_human", str(exc), "Dispatcher rejected the project path.")
+        update_result(
+            job_id,
+            "needs_human",
+            str(exc),
+            "Dispatcher rejected the project path.",
+            preflight=True,
+        )
         return
 
     try:
@@ -1119,6 +1169,7 @@ def run_job(job: dict[str, Any]) -> None:
             "needs_human",
             message,
             "Dispatcher preflight failed before ChatGPT was started. No retry was scheduled.\n" + message,
+            preflight=True,
         )
         LOG.error("job=%s launcher preflight failed: %s", job_id, message)
         return
@@ -1188,6 +1239,7 @@ def run_job(job: dict[str, Any]) -> None:
                 "needs_human",
                 message,
                 "Dispatcher could not start the ChatGPT agent. No retry was scheduled.\n" + message,
+                preflight=True,
             )
             LOG.error("job=%s agent launch failed: %s", job_id, message)
             return
@@ -1226,6 +1278,9 @@ def run_job(job: dict[str, Any]) -> None:
 
     output = read_log_tail(path)
     if manually_stopped:
+        quarantine_note = quarantine_primary_workspace(job_id, git_context)
+        if quarantine_note:
+            LOG.info("job=%s primary workspace cleanup: %s", job_id, quarantine_note)
         LOG.info("stopped job=%s by user", job_id)
         return
     protocol_output = agent_protocol_tail(output)
@@ -1235,7 +1290,10 @@ def run_job(job: dict[str, Any]) -> None:
         # did not write a terminal result itself: only this dispatcher converts
         # the marker into one failed job / one optional continuation.
         reason = blocked_hint.get("reason") or "Agent controller blocked the job."
+        quarantine_note = quarantine_primary_workspace(job_id, git_context)
         detail = compact(output, 6000)
+        if quarantine_note:
+            detail += "\n\nPrimary workspace cleanup:\n" + quarantine_note
         update_result(job_id, "needs_human", reason, detail, session_id=session_id, pid=process.pid)
         LOG.warning("job=%s stopped by agent controller: %s", job_id, reason)
         return
@@ -1253,6 +1311,9 @@ def run_job(job: dict[str, Any]) -> None:
     if not failure:
         current = get_job(job_id)
         if current and current.get("stage") == "stopped":
+            stop_cleanup = quarantine_primary_workspace(job_id, git_context)
+            if stop_cleanup:
+                LOG.info("job=%s primary workspace cleanup: %s", job_id, stop_cleanup)
             LOG.info("job=%s was stopped before deployment", job_id)
             return
 
@@ -1329,14 +1390,22 @@ def run_job(job: dict[str, Any]) -> None:
             LOG.info("completed and deployed job=%s", job_id)
             return
 
+    quarantine_note = quarantine_primary_workspace(job_id, git_context)
+    if quarantine_note:
+        LOG.info("job=%s primary workspace cleanup: %s", job_id, quarantine_note)
+
     if deployment_failed:
         detail = compact(read_log_tail(path), 8000)
+        if quarantine_note:
+            detail += "\n\nPrimary workspace cleanup:\n" + quarantine_note
         update_result(job_id, "needs_human", failure, detail, session_id=session_id, pid=process.pid)
         LOG.error("job=%s deployment needs human review: %s", job_id, failure)
         return
 
     restart_log = recover_browser_after_failure()
     detail = compact(output, 6000) + "\n\nBrowser restart:\n" + restart_log
+    if quarantine_note:
+        detail += "\n\nPrimary workspace cleanup:\n" + quarantine_note
     if attempts >= MAX_ATTEMPTS:
         update_result(job_id, "needs_human", failure, detail, session_id=session_id, pid=process.pid)
         LOG.error("job=%s needs human review: %s", job_id, failure)
