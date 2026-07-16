@@ -1476,6 +1476,8 @@ document.addEventListener('click', async function (event) {
 
   var actionButton = event.target.closest && event.target.closest('button[data-job-action]');
   if (!actionButton) return;
+  if (actionButton.dataset.jobAction === 'stop' &&
+      !window.confirm('このジョブを停止しますか？')) return;
   actionButton.disabled = true;
   try {
     await fetch('/api/jobs/' + encodeURIComponent(actionButton.dataset.jobId) + '/' + actionButton.dataset.jobAction, {
