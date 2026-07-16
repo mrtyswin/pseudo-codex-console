@@ -341,17 +341,31 @@ async function waitForStreamingDone(page, log, beforeState, timeoutMs = RESPONSE
   );
 }
 
-async function submitPrompt(page, fullPrompt, log) {
-  await fillTextarea(page, fullPrompt);
+async function waitForEnabledSendButton(page) {
   await page.waitForFunction(
     () => {
       const button = document.querySelector('button[data-testid="send-button"]');
       return !!button && !button.disabled;
     },
     { timeout: 15_000, polling: 250 }
-  ).catch(() => {
-    throw new Error('CHATGPT_SEND_BUTTON_UNAVAILABLE after prompt input');
-  });
+  );
+}
+
+async function submitPrompt(page, fullPrompt, log) {
+  await respectThrottleBackoff(log);
+  await fillTextarea(page, fullPrompt);
+  try {
+    await waitForEnabledSendButton(page);
+  } catch (_firstWait) {
+    // A "Too many requests" dialog blocks the composer and keeps the send
+    // button disabled; failing here without checking it turned every throttle
+    // into CHATGPT_SEND_BUTTON_UNAVAILABLE. Clear/wait out the throttle, then
+    // give the button one more chance.
+    await throwIfUsageLimited(page, log);
+    await waitForEnabledSendButton(page).catch(() => {
+      throw new Error('CHATGPT_SEND_BUTTON_UNAVAILABLE after prompt input');
+    });
+  }
   const beforeState = await snapshotAssistantState(page);
   const clicked = await page.evaluate(() => {
     const button = document.querySelector('button[data-testid="send-button"]');
@@ -465,6 +479,18 @@ async function dismissLimitNotice(page) {
 const THROTTLE_RETRY_LIMIT = Number.parseInt(process.env.PSEUDO_CODEX_THROTTLE_RETRIES || '3', 10);
 const THROTTLE_WAIT_MS = Number.parseInt(process.env.PSEUDO_CODEX_THROTTLE_WAIT_MS || '90000', 10);
 
+// Shared across all page sessions in this daemon: while one job is throttled,
+// every session must hold off instead of hammering ChatGPT in parallel and
+// prolonging the throttle window.
+let throttleBackoffUntil = 0;
+
+async function respectThrottleBackoff(log) {
+  const remaining = throttleBackoffUntil - Date.now();
+  if (remaining <= 0) return;
+  log(`Honoring shared throttle backoff for ${Math.ceil(remaining / 1000)}s before contacting ChatGPT.`);
+  await new Promise(resolve => setTimeout(resolve, remaining));
+}
+
 async function throwIfUsageLimited(page, log) {
   let detected = await detectUsageLimit(page);
   if (!detected) return;
@@ -475,6 +501,7 @@ async function throwIfUsageLimited(page, log) {
         `CHATGPT_THROTTLED: request throttle persisted after ${THROTTLE_RETRY_LIMIT} waits: ${detected.text}`
       );
     }
+    throttleBackoffUntil = Math.max(throttleBackoffUntil, Date.now() + THROTTLE_WAIT_MS);
     log(
       `ChatGPT request throttle detected; waiting ${Math.round(THROTTLE_WAIT_MS / 1000)}s ` +
       `before continuing (attempt ${attempt}/${THROTTLE_RETRY_LIMIT}).`
@@ -558,6 +585,7 @@ async function navigateWithRetry(page, targetUrl, log) {
   const navigateToComposer = async () => {
     // ChatGPT keeps background connections open, so network-idle is not a
     // reliable readiness signal. The composer is the actual UI prerequisite.
+    await respectThrottleBackoff(log);
     await page.goto(safeUrl, { waitUntil: 'domcontentloaded', timeout: 30_000 });
     if (!browserClient) {
       await page.waitForSelector('#prompt-textarea', { timeout: 20_000 });

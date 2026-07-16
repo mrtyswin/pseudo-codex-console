@@ -97,6 +97,21 @@ assert.equal(
   assert.equal(fromConversationOnly, null, "conversation history is not a usage-limit signal");
 })();
 
+// A throttle dialog keeps the send button disabled; the submit path must
+// check the throttle (and honor the shared backoff) instead of failing as
+// CHATGPT_SEND_BUTTON_UNAVAILABLE, and navigation must honor it too.
+const submitSource = source.slice(
+  source.indexOf("async function submitPrompt"),
+  source.indexOf("async function pageIsStreaming")
+);
+assert.match(submitSource, /respectThrottleBackoff\(log\)/);
+assert.match(submitSource, /throwIfUsageLimited\(page, log\)/);
+const navigateStart = source.indexOf("async function navigateWithRetry");
+assert.ok(navigateStart >= 0, "navigateWithRetry must exist");
+const navigateSource = source.slice(navigateStart, navigateStart + 2000);
+assert.match(source, /let throttleBackoffUntil = 0;/);
+assert.match(navigateSource, /respectThrottleBackoff\(log\)/);
+
 const loadRecoveryReload = new Function(
   "setTimeout",
   `${recoveryReloadSource}\nreturn reloadForRecovery;`
