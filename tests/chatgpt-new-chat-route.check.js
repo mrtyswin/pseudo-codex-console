@@ -6,11 +6,16 @@ const path = require("node:path");
 
 const source = fs.readFileSync(path.join(__dirname, "..", "agent", "chatgpt.js"), "utf8");
 
+assert.match(source, /const DEFAULT_CHATGPT_PROJECT_URL =/);
+assert.match(source, /process\.env\.CHATGPT_PROJECT_URL/);
 assert.match(source, /function newChatUrl\(\)/);
-assert.match(source, /return CHATGPT_URL;/);
-assert.doesNotMatch(source, /function projectHomeUrl\(/);
-assert.doesNotMatch(source, /'\/project'/);
-assert.match(source, /activeSessionFile === SESSION_FILE \? CHATGPT_URL : newChatUrl\(\)/);
+assert.match(source, /return CHATGPT_PROJECT_URL \|\| CHATGPT_URL;/);
+assert.match(source, /async function enterConfiguredProjectChat\(page, log\)/);
+assert.match(source, /CHATGPT_PROJECT_CHAT_BUTTON_UNAVAILABLE/);
+assert.match(source, /label === 'Chat' \|\| label === 'チャット'/);
+assert.match(source, /await navigateWithRetry\(/);
+assert.match(source, /if \(!browserClient\)/);
+assert.match(source, /if \(!browserClient\)[\s\S]*await enterConfiguredProjectChat\(page, log\)/);
 assert.match(source, /button\[data-testid="send-button"\]/);
 assert.match(source, /Submitted via send button/);
 assert.match(source, /CHATGPT_SEND_BUTTON_UNAVAILABLE after prompt input/);
