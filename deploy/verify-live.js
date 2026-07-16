@@ -26,9 +26,15 @@ assert.equal(healthResponse.ok, true);
 const health = await healthResponse.json();
 assert.equal(health.status, "ok");
 
-const jobsResponse = await fetch(baseUrl + "/api/jobs", { cache: "no-store" });
+const jobsResponse = await fetch(baseUrl + "/api/jobs?view=summary", { cache: "no-store" });
 assert.equal(jobsResponse.ok, true);
 const payload = await jobsResponse.json();
+if (payload.jobs.length > 0) {
+for (const heavyField of ["history", "conversationTurns", "transactions", "workerLog", "result", "instruction"]) {
+assert.equal(Object.hasOwn(payload.jobs[0], heavyField), false,
+heavyField + " must not be returned by the live list endpoint");
+}
+}
 const pageResponse = await fetch(baseUrl + "/", { cache: "no-store" });
 assert.equal(pageResponse.ok, true);
 const page = await pageResponse.text();
@@ -48,7 +54,11 @@ assert.ok(page.includes('id="job-status-filter"'));
 assert.ok(page.includes('id="job-result-count"'));
 assert.ok(page.includes('id="jobs"'));
 assert.ok(clientScript.includes("function applyFilters()"));
-assert.ok(clientScript.includes("setInterval(refreshJobs, 3000)"));
+assert.ok(clientScript.includes("fetch('/api/jobs?view=summary'"));
+assert.ok(clientScript.includes("setInterval(refreshJobs, 5000)"));
+assert.ok(clientScript.includes("pseudo-codex:jobs-updated"));
+assert.ok(page.includes("async function loadJobDetail(jobId)"));
+assert.ok(!page.includes("new MutationObserver(scheduleSync)"));
 assert.ok(!clientScript.includes("location.reload"));
 assert.ok(clientScript.includes('document.getElementById("jobs")') || clientScript.includes("document.getElementById('jobs')"));
 
