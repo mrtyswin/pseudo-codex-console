@@ -36,4 +36,38 @@ with tempfile.TemporaryDirectory() as temporary:
     config_path.write_text("{broken", encoding="utf-8")
     assert module.get_project_config("request-console")["executionMode"] == "verify_only"
 
+    invalid_container_service = {
+        "request-console": {
+            "workspace": str(workspace),
+            "requiresDeployment": True,
+            "deployCommand": "/usr/local/libexec/example-deploy",
+            "productionRoot": "docker-compose://example",
+            "service": "example-wordpress-1",
+        }
+    }
+    config_path.write_text(json.dumps(invalid_container_service), encoding="utf-8")
+    try:
+        module.load_project_configs()
+    except RuntimeError as exc:
+        assert "must be a systemd .service unit" in str(exc)
+    else:
+        raise AssertionError("a Docker container name was accepted as a systemd service")
+
+    invalid_docker_systemd_mix = {
+        "request-console": {
+            "workspace": str(workspace),
+            "requiresDeployment": True,
+            "deployCommand": "/usr/local/libexec/example-deploy",
+            "productionRoot": "docker-compose://example",
+            "service": "example.service",
+        }
+    }
+    config_path.write_text(json.dumps(invalid_docker_systemd_mix), encoding="utf-8")
+    try:
+        module.load_project_configs()
+    except RuntimeError as exc:
+        assert "uses Docker Compose" in str(exc)
+    else:
+        raise AssertionError("Docker Compose and systemd service checks were allowed together")
+
 print("DISPATCHER_DYNAMIC_CONFIG_RELOAD_OK")
