@@ -50,6 +50,7 @@ PROJECT_PATTERN = re.compile(r"^[a-z0-9][a-z0-9-]{0,63}$")
 COMPLETE_MARKER = "===TASK_COMPLETE==="
 BLOCKED_MARKER = "===AGENT_BLOCKED==="
 FATAL_MARKER = "===AGENT_FATAL==="
+FINAL_MARKER = "===AGENT_FINAL==="
 BROWSER_SERVICE = os.environ.get("PSEUDO_CODEX_BROWSER_SERVICE", "chatgpt-browser-agent.service")
 WORKER_ID = os.environ.get("PSEUDO_CODEX_WORKER_ID", f"{socket.gethostname()}-{os.getpid()}")
 # Each job has its own browser page, session key, and conversation file. Two
@@ -858,6 +859,7 @@ def update_result(
     session_id: str = "",
     pid: int | None = None,
     preflight: bool = False,
+    final_answer: str | None = None,
 ) -> None:
     path = "/api/jobs/" + parse.quote(job_id, safe="") + "/result"
     current = get_job(job_id) or {}
@@ -868,7 +870,11 @@ def update_result(
             "status": status,
             "lastError": compact(last_error, 20_000),
             "workerLog": log_reference(job_id, detail),
-            "finalAnswer": str(current.get("finalAnswer", "")),
+            "finalAnswer": (
+                str(current.get("finalAnswer", ""))
+                if final_answer is None
+                else compact(final_answer, 20_000)
+            ),
             "executionResult": str(current.get("executionResult", "")),
             "verificationResult": (
                 str(current.get("verificationResult", ""))
@@ -1382,6 +1388,7 @@ def run_job(job: dict[str, Any]) -> None:
                 if not has_file_changes
                 else "本番health・実画面・Git差分検証完了"
             )
+            final_hint = agent_marker(protocol_output, FINAL_MARKER)
             update_progress(job_id, "verifying", completion_message, session_id, process.pid, "VERIFY")
             update_result(
                 job_id,
@@ -1391,6 +1398,7 @@ def run_job(job: dict[str, Any]) -> None:
                 verification_result=combined_output,
                 session_id=session_id,
                 pid=process.pid,
+                final_answer=(final_hint or {}).get("finalAnswer"),
             )
             cleanup_git_worktree(git_context)
             LOG.info("completed and deployed job=%s", job_id)

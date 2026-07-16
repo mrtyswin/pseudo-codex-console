@@ -46,6 +46,7 @@ const COMPLETE_MARKER = '===TASK_COMPLETE===';
 // terminal state. These markers carry an agent-side decision without racing it.
 const BLOCKED_MARKER = '===AGENT_BLOCKED===';
 const FATAL_MARKER = '===AGENT_FATAL===';
+const FINAL_MARKER = '===AGENT_FINAL===';
 const GITHUB_COMPLETE_START = '===GITHUB_COMPLETE===';
 const GITHUB_COMPLETE_END = '===END_GITHUB_COMPLETE===';
 const GITHUB_DIRECT_MAX_TURNS = Number.parseInt(process.env.PSEUDO_CODEX_GITHUB_DIRECT_MAX_TURNS || '10', 10);
@@ -1519,6 +1520,11 @@ async function main() {
       }
       phase = 'VERIFY';
       await reportProgress(args, 'verifying', '機械的完了条件を確認', statePayload({}));
+      if (finalAnswer) {
+        // Question-style jobs used to bury their answer in the conversation
+        // log; hand it to the dispatcher so the job result shows it directly.
+        console.log(FINAL_MARKER + JSON.stringify({ finalAnswer: finalAnswer.slice(0, 20000) }));
+      }
       console.log(`\n${COMPLETE_MARKER}`);
       return;
     }
