@@ -35,10 +35,14 @@ const page = await pageResponse.text();
 const clientResponse = await fetch(baseUrl + "/client.js", { cache: "no-store" });
 assert.equal(clientResponse.ok, true);
 const clientScript = await clientResponse.text();
-assert.ok(page.includes("現在の担当: "));
-assert.ok(page.includes("button[data-job-action]"));
-assert.ok(page.includes("data-copy-handoff"));
-assert.ok(page.includes("ChatGPT用引き継ぎをコピー"));
+// The job list renders lightweight row summaries since the 表示が遅い fix;
+// full detail markup (現在の担当 etc.) is client-rendered on selection.
+assert.ok(page.includes('class="job-row-summary"') || !payload.jobs.length,
+"job rows must render their summary");
+// Detail-panel wiring moved into the client script with the lightweight list.
+assert.ok(clientScript.includes("button[data-job-action]"));
+assert.ok(clientScript.includes("data-copy-handoff"));
+assert.ok(clientScript.includes("ChatGPT用引き継ぎをコピー"));
 assert.ok(page.includes('id="job-search"'));
 assert.ok(page.includes('id="job-status-filter"'));
 assert.ok(page.includes('id="job-result-count"'));
@@ -52,9 +56,10 @@ const renderedCardCount = countRenderedCards(page);
 if (renderedCardCount > 0) {
 for (const job of payload.jobs.slice(0, renderedCardCount)) {
 const card = extractJobCard(page, job.id);
-const badges = (card.match(/class="badge /g) || []).length;
-const expected = ["completed", "failed", "stopped", "blocked"].includes(job.stage) ? 1 : 2;
-assert.equal(badges, expected, "badge count mismatch for " + job.id + " stage=" + job.stage);
+assert.ok(
+card.includes('job-state stage-' + job.stage),
+"state chip mismatch for " + job.id + " stage=" + job.stage
+);
 }
 } else {
 assert.ok(

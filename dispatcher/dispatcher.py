@@ -482,7 +482,15 @@ def publish_git_changes(
         commit = run_git(worktree, ["commit", "-m", f"Pseudo Codex: {title}"])
         if commit.returncode != 0:
             return False, "Cannot commit Git changes; configure a Git author on the Ubuntu host: " + git_error(commit)
-        branch_push = run_git(worktree, ["push", "--set-upstream", remote, branch], timeout=300)
+        # The job branch is owned exclusively by this job's worktree. After the
+        # rebase onto origin/<base> below (or on a continuation retry), the
+        # local branch diverges from a previously pushed attempt and a plain
+        # push is rejected as non-fast-forward, which killed every retry.
+        branch_push = run_git(
+            worktree,
+            ["push", "--force-with-lease", "--set-upstream", remote, branch],
+            timeout=300,
+        )
         if branch_push.returncode != 0:
             return False, "Cannot push Git branch: " + git_error(branch_push)
         push_result = "ok"
