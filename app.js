@@ -3411,6 +3411,38 @@ job.currentTurn ? ' · ChatGPT turn: ' + escapeHtml(job.currentTurn) : "",
 ].join("");
 }
 
+function jobFinishedAt(job) {
+const terminalStages = new Set(["completed", "failed", "stopped", "blocked"]);
+if (!terminalStages.has(job.stage)) {
+return null;
+}
+const history = Array.isArray(job.history) ? job.history : [];
+for (let index = history.length - 1; index >= 0; index -= 1) {
+const entry = history[index];
+if (entry && terminalStages.has(entry.stage)) {
+return entry.at || job.updatedAt;
+}
+}
+return job.updatedAt;
+}
+
+function formatJobDuration(job, now) {
+const createdAt = new Date(job.createdAt).getTime();
+const finishedAt = jobFinishedAt(job);
+const endAt = finishedAt ? new Date(finishedAt).getTime() : Number(now || Date.now());
+if (!Number.isFinite(createdAt) || !Number.isFinite(endAt)) {
+return finishedAt ? "所要時間不明" : "経過時間不明";
+}
+const totalMinutes = Math.max(0, Math.floor((endAt - createdAt) / 60000));
+const label = finishedAt ? "所要 " : "経過 ";
+if (totalMinutes < 1) {
+return label + "1分未満";
+}
+const hours = Math.floor(totalMinutes / 60);
+const minutes = totalMinutes % 60;
+return label + (hours ? hours + "時間" : "") + (minutes ? minutes + "分" : "");
+}
+
 function renderJobRowSummary(job) {
 const stageLabels = {
 queued: "実行待ち",
@@ -3434,7 +3466,7 @@ return [
 '<span class="job-project">', escapeHtml(job.project || "-"), '</span>',
 '<span class="job-state stage-', escapeHtml(job.stage || "queued"), '">', escapeHtml(state), '</span>',
 '<span class="job-worker">', escapeHtml(owner), '</span>',
-'<span class="job-updated">更新済み</span>',
+'<span class="job-updated">', escapeHtml(formatJobDuration(job)), '</span>',
 '</div>'
 ].join("");
 }
