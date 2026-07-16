@@ -11,6 +11,11 @@ const prompt = agent.buildInitialPrompt("ssh今とじてるん？", [], "/home/u
 assert.match(prompt, /Ubuntu host directly/);
 assert.match(prompt, /concise user-facing conclusion/);
 assert.doesNotMatch(prompt, /sandboxed/);
+// The chat UI renders markdown outside code fences and destroys leading
+// spaces, "-", and "+" — patches died repeatedly until blocks were fenced.
+assert.match(prompt, /wrap EVERY action block/i);
+assert.match(prompt, /```text/);
+assert.doesNotMatch(prompt, /no markdown, no code fences/);
 assert.equal(agent.isHostOnlyCommand("systemctl status ssh", {
   hostNative: true,
   hostWorkspace: "/home/ubuntu/chatgpt-projects/request-console",

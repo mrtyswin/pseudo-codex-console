@@ -378,7 +378,11 @@ function buildInitialPrompt(task, files, cwd, hostNative = false) {
     `Working directory: ${cwd}\n` +
     `Execution environment: ${hostNative ? 'Ubuntu host directly (no project sandbox).' : 'configured local environment.'}\n\n` +
     `You are a coding agent with access to the user's filesystem.\n` +
-    `Use these plain-text formats — no markdown, no code fences:\n\n` +
+    `Use these plain-text action formats. CRITICAL: wrap EVERY action block, ` +
+    `including its ===...=== marker lines, inside one fenced code block ` +
+    '(```text ... ```). Outside a code fence the chat interface renders ' +
+    `markdown and destroys leading spaces, "-", "+", and "#" characters, ` +
+    `which corrupts patches and edits.\n\n` +
     `To run one shell command:\n` +
     `===RUN: <command>===\n` +
     `For a multi-line shell command:\n` +
@@ -648,6 +652,7 @@ function protocolFormatHint(response) {
     '@@ unified diff hunks @@',
     '===ENDPATCH===',
     'Bare RUN/PATCH keywords, "RUN:" prefixes, and "*** Begin Patch" apply-patch format are NOT supported.',
+    'Wrap the whole block, markers included, in a ```text fenced code block so the chat UI cannot mangle it.',
     'Resend the same action now using the exact delimiters above.',
   ].join('\n');
 }
@@ -1393,7 +1398,10 @@ async function main() {
       if (mutationResults.some(result => result.status !== 0)) {
         const failureDetail = buildCommandResults(mutationResults);
         console.error(`\n[structured edit failed]\n${failureDetail}`);
-        prompt = `Structured edit failed. Do not repeat the same operation. Re-read only a small unique target range, then send one corrected PATCH/EDIT or a complete FILE replacement:\n\n${failureDetail}`;
+        prompt = 'Structured edit failed. Do not repeat the same operation.\n' +
+          'Most likely cause: your block was sent outside a fenced code block, so the chat UI stripped leading spaces, "-", and "+" characters and the content no longer matches the file.\n' +
+          'Re-read only a small unique target range, then send ONE corrected action wrapped in a ```text fenced code block. Prefer ===REPLACE: path=== with exact ===OLD===/===NEW=== text over PATCH.\n\n' +
+          failureDetail;
         if (updateNoProgress()) {
           const reason = `No acceptance progress for ${MAX_NO_PROGRESS_TURNS} consecutive turns.`;
           if (await startFreshStrategy(reason, 'no_progress', buildCommandResults(mutationResults))) continue;
