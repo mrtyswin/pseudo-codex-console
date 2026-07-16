@@ -51,6 +51,7 @@ const requiredFragments = [
 ".chat-row-user .chat-bubble{background:#91e85f",
 '.chat-row-user .chat-bubble::after{content:"";position:absolute;top:0;right:-7px',
 '.chat-row-assistant .chat-bubble::before{content:"";position:absolute;top:0;left:-7px',
+".stage-failed{background:#dc2626;color:#fff;border:1px solid #991b1b;box-shadow:0 0 0 2px #fee2e2;font-weight:850}",
 ".chat-thread{padding:16px 13px 22px;background-color:#b7cbe0;background-image:linear-gradient",
 ];
 
