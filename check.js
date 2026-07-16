@@ -88,6 +88,15 @@ const token = crypto.randomUUID();
 const testOnly = await createJob("Test-only " + token, "test");
 assert.equal(testOnly.isTest, true);
 
+const autoTitled = await postJson("/jobs", {
+project: "request-console",
+instruction: "\n  ## Auto title   " + token + "  \nsecond line",
+kind: "test"
+});
+assert.equal(autoTitled.title, "Auto title " + token);
+assert.equal(autoTitled.instruction, "## Auto title   " + token + "  \nsecond line");
+assert.equal(autoTitled.isTest, true);
+
 const completedCreated = await createJob("Completed display test " + token);
 const completedClaimed = await claim();
 assert.equal(completedClaimed.id, completedCreated.id, "test jobs must not be claimed");
@@ -310,6 +319,10 @@ assert.ok(page.includes("選択中のジョブ"));
 assert.ok(page.includes(".detail-panel.is-mobile-open"));
 assert.ok(page.includes('event.key === "Escape"'));
 assert.ok(clientScript.includes("fetch('/api/jobs'"));
+assert.ok(page.includes("タイトルは指示の先頭行から自動生成します。"));
+assert.ok(!page.includes('<input id="title" name="title"'));
+assert.ok(clientScript.includes("textarea[name=\"instruction\"]"));
+assert.ok(!clientScript.includes("input[name=\"title\"]"));
 assert.ok(clientScript.includes('function updateQueueSummary'));
 assert.ok(clientScript.includes("var detailStates = new Map()"));
 assert.ok(clientScript.includes("button[data-job-action]"));
@@ -365,7 +378,7 @@ assert.ok(handoff.includes("最終回答テスト"));
 assert.ok(handoff.includes("===RUN: node --check app.js==="));
 
 const listed = await requestJson("/api/jobs", { method: "GET" });
-assert.equal(listed.jobs.length, 8);
+assert.equal(listed.jobs.length, 9);
 assert.equal(listed.jobs.find(function(job) { return job.id === testOnly.id; }).kind, "test");
 console.log("REQUEST_CONSOLE_ISOLATED_REGRESSION_OK " + token);
 }
