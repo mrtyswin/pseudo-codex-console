@@ -102,6 +102,17 @@ def load_project_configs() -> dict[str, dict[str, Any]]:
             raise RuntimeError(f"Project {name} is missing workspace")
         if config.get("requiresDeployment") and not config.get("deployCommand"):
             raise RuntimeError(f"Project {name} requires deployment but has no deployCommand")
+        service = config.get("service")
+        if service:
+            if not isinstance(service, str) or not service.endswith(".service"):
+                raise RuntimeError(
+                    f"Project {name} service must be a systemd .service unit, not a container name"
+                )
+            production_root = str(config.get("productionRoot", ""))
+            if production_root.startswith("docker-compose://"):
+                raise RuntimeError(
+                    f"Project {name} uses Docker Compose and must not configure a systemd service check"
+                )
         git_config = config.get("git", {})
         if git_config and not isinstance(git_config, dict):
             raise RuntimeError(f"Project {name} git configuration must be an object")
