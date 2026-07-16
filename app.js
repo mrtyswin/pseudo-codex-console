@@ -1358,6 +1358,29 @@ document.addEventListener('scroll', function (event) {
 }, true);
 
 document.addEventListener('click', async function (event) {
+  var newJobToggle = event.target.closest && event.target.closest('[data-new-job-toggle]');
+  if (newJobToggle) {
+    var newJobPanel = document.getElementById('new-job-panel');
+    if (newJobPanel) {
+      newJobPanel.hidden = !newJobPanel.hidden;
+      newJobToggle.setAttribute('aria-expanded', newJobPanel.hidden ? 'false' : 'true');
+      if (!newJobPanel.hidden) {
+        var instruction = newJobPanel.querySelector('textarea[name="instruction"]');
+        if (instruction) instruction.focus();
+      }
+    }
+    return;
+  }
+
+  var newJobClose = event.target.closest && event.target.closest('[data-new-job-close]');
+  if (newJobClose) {
+    var panel = document.getElementById('new-job-panel');
+    if (panel) panel.hidden = true;
+    var opener = document.querySelector('[data-new-job-toggle]');
+    if (opener) opener.setAttribute('aria-expanded', 'false');
+    return;
+  }
+
   var handoffButton = event.target.closest && event.target.closest('button[data-copy-handoff]');
   if (handoffButton) {
     var handoffContainer = handoffButton.closest('.handoff-actions');
@@ -2440,13 +2463,27 @@ return value;
 return Object.fromEntries(new URLSearchParams(body));
 }
 
+function deriveJobTitle(instruction) {
+const normalized = String(instruction || "")
+.replace(/\r\n?/g, "\n")
+.split("\n")
+.map(function(line) { return line.trim(); })
+.find(Boolean) || "無題";
+
+return normalized
+.replace(/^#+\s*/, "")
+.replace(/\s+/g, " ")
+.slice(0, 200);
+}
+
 function parseJobRequest(request, body) {
 const value = parseBody(request, body);
+const instruction = String(value.instruction || "").trim();
 
 return {
 project: String(value.project || DEFAULT_PROJECT).trim(),
-title: String(value.title || "").trim(),
-instruction: String(value.instruction || "").trim(),
+title: String(value.title || "").trim() || deriveJobTitle(instruction),
+instruction,
 kind: value.kind === "test" || value.isTest === true ? "test" : "job"
 };
 }
@@ -3833,8 +3870,8 @@ created.textContent = "作成 " + formatCreatedAt(job.createdAt);
         panel.hidden = !panel.hidden;
         toggle.setAttribute("aria-expanded", panel.hidden ? "false" : "true");
         if (!panel.hidden) {
-          var title = panel.querySelector('input[name="title"]');
-          if (title) title.focus();
+          var instruction = panel.querySelector('textarea[name="instruction"]');
+          if (instruction) instruction.focus();
         }
       }
       return;
@@ -3988,10 +4025,9 @@ function renderPage(jobs, message) {
     '<article class="kpi" style="--accent:#16a34a;--tint:#f0fdf4"><span class="kpi-label">完了</span><strong class="kpi-value" data-kpi-value="completed">', String(completedCount), '</strong><span class="kpi-note">保存済み</span></article>',
     "</section>",
     '<section id="new-job-panel" class="new-job-panel" hidden>',
-    '<div class="panel-heading"><div><h2>新規ジョブ</h2><p>既存の登録APIをそのまま使用します。</p></div><button type="button" class="icon-button" data-new-job-close aria-label="閉じる">×</button></div>',
+    '<div class="panel-heading"><div><h2>新規ジョブ</h2><p>タイトルは指示の先頭行から自動生成します。</p></div><button type="button" class="icon-button" data-new-job-close aria-label="閉じる">×</button></div>',
     '<form method="post" action="/jobs" class="new-job-form">',
     '<div class="field"><label for="project">プロジェクト</label><select id="project" name="project" required>', renderProjectOptions(), '</select></div>',
-    '<div class="field"><label for="title">ジョブタイトル</label><input id="title" name="title" maxlength="200" required></div>',
     '<div class="field" style="grid-column:1/-1"><label for="instruction">詳細な自然言語指示</label><textarea id="instruction" name="instruction" maxlength="20000" required></textarea></div>',
     '<div class="submit-field" style="grid-column:1/-1"><button type="submit" class="primary-button">キューへ登録</button></div>',
     "</form>",
