@@ -322,7 +322,13 @@ assert.ok(page.includes("← 一覧へ戻る"));
 assert.ok(page.includes("選択中のジョブ"));
 assert.ok(page.includes(".detail-panel.is-mobile-open"));
 assert.ok(page.includes('event.key === "Escape"'));
-assert.ok(clientScript.includes("fetch('/api/jobs'"));
+assert.ok(clientScript.includes("fetch('/api/jobs?view=summary'"));
+assert.equal((clientScript.match(/setInterval\(refreshJobs/g) || []).length, 1);
+assert.ok(clientScript.includes("setInterval(refreshJobs, 5000)"));
+assert.ok(clientScript.includes("pseudo-codex:jobs-updated"));
+assert.ok(page.includes("async function loadJobDetail(jobId)"));
+assert.ok(page.includes('fetch("/api/jobs/" + encodeURIComponent(jobId)'));
+assert.ok(!page.includes("new MutationObserver(scheduleSync)"));
 assert.ok(page.includes("タイトルは指示の先頭行から自動生成します。"));
 assert.ok(!page.includes('<input id="title" name="title"'));
 assert.ok(clientScript.includes("textarea[name=\"instruction\"]"));
@@ -385,6 +391,19 @@ assert.ok(handoff.includes("===RUN: node --check app.js==="));
 const listed = await requestJson("/api/jobs", { method: "GET" });
 assert.equal(listed.jobs.length, 9);
 assert.equal(listed.jobs.find(function(job) { return job.id === testOnly.id; }).kind, "test");
+const summaryResponse = await fetchWithRetry("/api/jobs?view=summary", { method: "GET" });
+const summaryText = await summaryResponse.text();
+const summary = JSON.parse(summaryText);
+assert.equal(summary.jobs.length, listed.jobs.length);
+const completedSummary = summary.jobs.find(function(job) { return job.id === completedCreated.id; });
+assert.equal(completedSummary.title, completedCreated.title);
+assert.equal(completedSummary.searchText, "isolated regression test");
+for (const heavyField of ["history", "conversationTurns", "transactions", "workerLog", "result", "instruction"]) {
+assert.equal(Object.hasOwn(completedSummary, heavyField), false, heavyField + " must not be in list summaries");
+}
+const fullListResponse = await fetchWithRetry("/api/jobs", { method: "GET" });
+const fullListText = await fullListResponse.text();
+assert.ok(summaryText.length < fullListText.length, "summary response must be smaller than the full job list");
 console.log("REQUEST_CONSOLE_ISOLATED_REGRESSION_OK " + token);
 }
 

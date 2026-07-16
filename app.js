@@ -1296,7 +1296,7 @@ function applyFilters() {
   var shown = 0;
   Array.from(document.querySelectorAll('#jobs .job')).forEach(function (card) {
     var job = cachedJobs.find(function (item) { return item.id === card.dataset.jobId; });
-    var matchesKeyword = !keyword || (job && [job.title, job.instruction, job.id, job.project]
+    var matchesKeyword = !keyword || (job && [job.title, job.searchText, job.id, job.project]
       .join(' ').toLowerCase().includes(keyword));
     var matchesStatus = status === 'all' || (job && (job.status === status || job.stage === status ||
       (status === 'completed' && job.stage === 'completed')));
@@ -1309,7 +1309,7 @@ function applyFilters() {
 
 async function refreshJobs() {
   try {
-    var response = await fetch('/api/jobs', {cache: 'no-store'});
+    var response = await fetch('/api/jobs?view=summary', {cache: 'no-store'});
     if (!response.ok) return;
     var payload = await response.json();
     cachedJobs = Array.isArray(payload.jobs) ? payload.jobs : [];
@@ -1335,6 +1335,9 @@ async function refreshJobs() {
       if (existing) restoreCard(existing);
     });
     applyFilters();
+    window.dispatchEvent(new CustomEvent('pseudo-codex:jobs-updated', {
+      detail: {jobs: cachedJobs}
+    }));
   } catch (_error) {
     return;
   }
@@ -1495,8 +1498,13 @@ var statusFilter = document.getElementById('job-status-filter');
 if (search) search.addEventListener('input', applyFilters);
 if (statusFilter) statusFilter.addEventListener('change', applyFilters);
 void refreshJobs();
-setInterval(refreshJobs, 3000);
-window.__pseudoCodexClientV2 = {refreshJobs: refreshJobs, historyText: historyText, renderJob: renderJob};
+setInterval(refreshJobs, 5000);
+window.__pseudoCodexClientV2 = {
+  refreshJobs: refreshJobs,
+  historyText: historyText,
+  renderJob: renderJob,
+  getJobs: function () { return cachedJobs.slice(); }
+};
 }());`;
 
 let mutationChain = Promise.resolve();
@@ -1962,6 +1970,26 @@ return value.map(normalizeJob);
 console.error("Failed to read jobs:", error);
 return [];
 }
+}
+
+function summarizeJob(job) {
+return {
+id: job.id,
+project: job.project,
+createdAt: job.createdAt,
+updatedAt: job.updatedAt,
+attempts: job.attempts,
+title: job.title,
+kind: job.kind,
+isTest: job.isTest,
+status: job.status,
+stage: job.stage,
+assignee: job.assignee,
+displayStatus: job.displayStatus,
+workerId: job.workerId,
+phase: job.phase,
+searchText: String(job.instruction || "").slice(0, 1000)
+};
 }
 
 function writeJobs(jobs) {
@@ -3706,6 +3734,8 @@ const CONSOLE_UI_SCRIPT = String.raw`<script>
   var selectedJobId = "";
   var createdJobId = new URLSearchParams(window.location.search).get("created") || "";
   var jobsById = new Map();
+  var detailJobsById = new Map();
+  var detailRequests = new Map();
 
   function revealCreatedJob() {
     if (!createdJobId) return;
@@ -3716,8 +3746,6 @@ const CONSOLE_UI_SCRIPT = String.raw`<script>
     history.replaceState(null, "", window.location.pathname + window.location.hash);
     createdJobId = "";
   }
-  var observer = null;
-  var syncTimer = null;
   var detailViewStates = new Map();
 
   function detailContent(detailsNode) {
@@ -3869,7 +3897,29 @@ created.textContent = "作成 " + formatCreatedAt(job.createdAt);
     card.setAttribute("aria-label", (job.title || "無題") + " の詳細を表示");
   }
 
-  function renderDetail(openOnMobile) {
+  async function loadJobDetail(jobId) {
+    var summary = jobsById.get(jobId);
+    var cached = detailJobsById.get(jobId);
+    if (cached && (!summary || cached.updatedAt === summary.updatedAt)) return cached;
+    if (detailRequests.has(jobId)) return detailRequests.get(jobId);
+
+    var request = fetch("/api/jobs/" + encodeURIComponent(jobId), {cache: "no-store"})
+      .then(function (response) {
+        if (!response.ok) throw new Error("job detail request failed");
+        return response.json();
+      })
+      .then(function (job) {
+        detailJobsById.set(jobId, job);
+        return job;
+      })
+      .finally(function () {
+        detailRequests.delete(jobId);
+      });
+    detailRequests.set(jobId, request);
+    return request;
+  }
+
+  async function renderDetail(openOnMobile) {
     var panel = document.getElementById("job-detail-panel");
     if (!panel) return;
     captureDetailViews(panel);
@@ -3894,7 +3944,23 @@ created.textContent = "作成 " + formatCreatedAt(job.createdAt);
       return;
     }
 
-    var selectedJob = jobsById.get(selectedJobId) || {};
+    var requestedJobId = selectedJobId;
+    var summaryJob = jobsById.get(requestedJobId) || {};
+    if (!detailJobsById.has(requestedJobId)) {
+      panel.innerHTML = '<div class="detail-empty"><strong>詳細を読み込み中</strong><p>選択したジョブの会話・結果・ログだけを取得しています。</p></div>';
+    }
+
+    var selectedJob;
+    try {
+      selectedJob = await loadJobDetail(requestedJobId);
+    } catch (_error) {
+      if (selectedJobId === requestedJobId) {
+        panel.innerHTML = '<div class="detail-empty"><strong>詳細を読み込めませんでした</strong><p>次の自動更新で再試行します。</p></div>';
+      }
+      return;
+    }
+    if (selectedJobId !== requestedJobId) return;
+
     var mobileHeading = document.createElement("div");
     mobileHeading.className = "mobile-detail-heading";
 
@@ -3905,15 +3971,15 @@ created.textContent = "作成 " + formatCreatedAt(job.createdAt);
     closeButton.textContent = "← 一覧へ戻る";
 
     var selectedState = document.createElement("strong");
-    selectedState.className = "mobile-detail-state stage-" + String(selectedJob.stage || "queued");
-    selectedState.textContent = stageLabel(selectedJob);
+    selectedState.className = "mobile-detail-state stage-" + String(summaryJob.stage || selectedJob.stage || "queued");
+    selectedState.textContent = stageLabel(summaryJob);
 
     var selectedTitle = document.createElement("span");
     selectedTitle.className = "mobile-detail-title";
     var selectedLabel = document.createElement("small");
     selectedLabel.textContent = "選択中のジョブ";
     var selectedName = document.createElement("strong");
-    selectedName.textContent = selectedJob.title || "無題";
+    selectedName.textContent = summaryJob.title || selectedJob.title || "無題";
     selectedTitle.append(selectedLabel, selectedName);
     mobileHeading.append(closeButton, selectedState, selectedTitle);
 
@@ -3976,33 +4042,12 @@ created.textContent = "作成 " + formatCreatedAt(job.createdAt);
 
   function applyJobs(jobs) {
     jobsById = new Map(jobs.map(function (job) { return [job.id, job]; }));
-    if (observer) observer.disconnect();
     document.querySelectorAll("#jobs .job").forEach(function (card) {
       var job = jobsById.get(card.dataset.jobId);
       if (job) buildRowSummary(card, job);
     });
-    renderDetail();
+    void renderDetail(false);
     updateKpis(jobs);
-    if (observer) {
-      var list = document.getElementById("jobs");
-      if (list) observer.observe(list, { childList: true, subtree: true });
-    }
-  }
-
-  async function syncUi() {
-    try {
-      var response = await fetch("/api/jobs", { cache: "no-store" });
-      if (!response.ok) return;
-      var payload = await response.json();
-      applyJobs(Array.isArray(payload.jobs) ? payload.jobs : []);
-    } catch (_error) {
-      return;
-    }
-  }
-
-  function scheduleSync() {
-    clearTimeout(syncTimer);
-    syncTimer = setTimeout(syncUi, 80);
   }
 
   document.addEventListener("toggle", function (event) {
@@ -4038,7 +4083,7 @@ created.textContent = "作成 " + formatCreatedAt(job.createdAt);
     var card = event.target.closest && event.target.closest("#jobs .job");
     if (!card || event.target.closest("button,a,input,select,textarea")) return;
     selectedJobId = card.dataset.jobId;
-    renderDetail(true);
+    void renderDetail(true);
   });
 
   document.addEventListener("keydown", function (event) {
@@ -4054,28 +4099,31 @@ created.textContent = "作成 " + formatCreatedAt(job.createdAt);
     if (!card || (event.key !== "Enter" && event.key !== " ")) return;
     event.preventDefault();
     selectedJobId = card.dataset.jobId;
-    renderDetail(true);
+    void renderDetail(true);
   });
 
   document.addEventListener("input", function (event) {
-    if (event.target.matches("#job-search")) setTimeout(renderDetail, 0);
+    if (event.target.matches("#job-search")) setTimeout(function () { void renderDetail(false); }, 0);
   });
   document.addEventListener("change", function (event) {
-    if (event.target.matches("#job-status-filter")) setTimeout(renderDetail, 0);
+    if (event.target.matches("#job-status-filter")) setTimeout(function () { void renderDetail(false); }, 0);
   });
 
-  var list = document.getElementById("jobs");
-  if (list) {
-    observer = new MutationObserver(scheduleSync);
-    observer.observe(list, { childList: true, subtree: true });
-  }
+  window.addEventListener("pseudo-codex:jobs-updated", function (event) {
+    var jobs = event.detail && Array.isArray(event.detail.jobs) ? event.detail.jobs : [];
+    applyJobs(jobs);
+  });
   window.addEventListener("resize", function () {
     if (!window.matchMedia("(max-width: 780px)").matches) closeMobileDetail();
   });
   requestAnimationFrame(function () {
     requestAnimationFrame(revealCreatedJob);
   });
-  void syncUi();
+  var client = window.__pseudoCodexClientV2;
+  if (client && typeof client.getJobs === "function") {
+    var initialJobs = client.getJobs();
+    if (initialJobs.length > 0) applyJobs(initialJobs);
+  }
 }());
 </script>`;
 
@@ -4197,7 +4245,7 @@ function renderPage(jobs, message) {
     '<details class="settings-details" id="settings-section"><summary><span class="settings-summary-copy"><strong>プロジェクトを追加・設定を更新</strong><small>新しい実行先の登録、または既存プロジェクトの設定変更</small></span><span class="settings-summary-badge">保存すると反映</span></summary><div class="settings-content"><p class="settings-intro"><strong>新規追加と更新は同じフォームです。</strong> 新しいプロジェクト名なら追加され、登録済みと同じ名前ならその設定を更新します。</p><ol class="settings-flow"><li><span>1</span>プロジェクト名・Workspace・実行方式を決める</li><li><span>2</span>必要な場合だけデプロイとGitを設定する</li><li><span>3</span>保存後、新規ジョブでそのプロジェクトを選ぶ</li></ol>', renderProjectConfigForm(), "</div></details>",
     "</section>",
     "</main>",
-    '<footer class="footer"><span><span>Pseudo Codex Console v0.1.3</span> · deployed ', escapeHtml(deployedRevision), '</span><span>3秒ごとに更新 · JST表示</span></footer>',
+    '<footer class="footer"><span><span>Pseudo Codex Console v0.1.3</span> · deployed ', escapeHtml(deployedRevision), '</span><span>5秒ごとに軽量更新 · JST表示</span></footer>',
     "</div>",
     CLIENT_SCRIPT_TAG,
     CONSOLE_UI_SCRIPT,
@@ -4285,8 +4333,11 @@ return;
 }
 
 if (request.method === "GET" && url.pathname === "/api/jobs") {
+const jobs = readJobs();
 sendJson(response, 200, {
-jobs: readJobs()
+jobs: url.searchParams.get("view") === "summary"
+? jobs.map(summarizeJob)
+: jobs
 });
 return;
 }
