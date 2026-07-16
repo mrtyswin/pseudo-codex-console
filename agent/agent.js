@@ -615,6 +615,14 @@ function structuredEditSyntaxErrors(response, parsed) {
     .map(label => `${label} block is malformed or missing its exact closing delimiter.`);
 }
 
+function hasCompletionMarker(response) {
+  // The marker counts only on its own line. A response that merely quotes it
+  // mid-sentence — observed: "成功確認なしに ===TASK_COMPLETE=== を出力できません"
+  // (an explicit refusal) — must not complete the job; treating any substring
+  // occurrence as completion marked a do-nothing job as done.
+  return /^===TASK_COMPLETE===[ \t]*$/m.test(String(response || '').replace(/\r\n?/g, '\n'));
+}
+
 function protocolFormatHint(response) {
   // Fires only when a response yielded no parsable action at all. Detect the
   // recurring failure mode where ChatGPT keeps the RUN/PATCH intent but drops
@@ -1308,7 +1316,7 @@ async function main() {
     const patches = parsePatchBlocks(response);
     const edits = parseEditBlocks(response);
     const replacements = parseReplaceBlocks(response);
-    const completed = response.includes(COMPLETE_MARKER);
+    const completed = hasCompletionMarker(response);
     const mutationResults = [];
     const syntaxErrors = structuredEditSyntaxErrors(response, {
       changes,
@@ -1549,6 +1557,7 @@ module.exports = {
   parseGithubCompletion,
   parsePatchBlocks,
   parseReplaceBlocks,
+  hasCompletionMarker,
   parseRunBlocks,
   protocolFormatHint,
   structuredEditSyntaxErrors,
