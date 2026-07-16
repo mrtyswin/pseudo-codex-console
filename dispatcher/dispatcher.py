@@ -1303,7 +1303,13 @@ def run_job(job: dict[str, Any]) -> None:
     changed_files = current_after_agent.get("changedFiles", []) if current_after_agent else []
     has_file_changes = bool(changed_files)
     if not failure:
-        failure = "" if return_code == 0 and COMPLETE_MARKER in protocol_output else (
+        # The marker counts only on its own line: ChatGPT responses quoted in
+        # the log can contain the literal string mid-sentence (even inside a
+        # refusal), and substring matching turned such no-op jobs into "done".
+        marker_present = re.search(
+            r"^===TASK_COMPLETE===[ \t]*$", protocol_output, re.MULTILINE
+        ) is not None
+        failure = "" if return_code == 0 and marker_present else (
             f"Agent exited {return_code}; completion marker missing." if return_code == 0 else f"Agent exited {return_code}."
         )
     if fatal_hint and fatal_hint.get("reason"):
