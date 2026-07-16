@@ -2305,16 +2305,29 @@ return (index + 1) + ". 第" + (item.pass || index + 2) + "案へ切り替え" +
 }).join("\n\n");
 }
 
-function renderHumanErrorText(value) {
+function renderHumanErrorText(value, job) {
 const raw = String(value || "").trim();
-if (!raw) return "停止・失敗は記録されていません。";
+const context = job || {};
 let explanation = "処理中に問題が発生しました。下の技術情報を確認してください。";
 if (raw.includes("UBUNTU_WORKSPACE_DIRTY")) explanation = "Ubuntuの正規ワークスペースに未完了の変更が残っているため、安全のため開始できませんでした。";
 else if (raw.includes("CHATGPT_THROTTLED")) explanation = "ChatGPTのリクエスト制限（Too many requests）が待機リトライ後も解除されなかったため停止しました。数分後に再実行してください。";
 else if (raw.includes("MODEL_USAGE_LIMIT")) explanation = "ChatGPTの利用上限に達したため、自動実行を停止しました。";
 else if (raw.includes("Waiting failed") || raw.includes("unresponsive")) explanation = "ChatGPTの応答を時間内に受け取れなかったため停止しました。";
 else if (raw.includes("Permission denied")) explanation = "必要なファイルまたはサービスを操作する権限がありませんでした。";
-return explanation + "\n\n技術情報:\n" + raw;
+else if (!raw) explanation = "停止・失敗の具体的な理由は記録されていません。";
+return [
+"失敗時の状況:",
+"状態: " + (context.displayStatus || context.stage || "不明"),
+"工程: " + (context.phase || "不明"),
+"担当: " + (context.assignee || "不明"),
+"試行回数: " + (context.attempts == null ? "不明" : context.attempts),
+"エラー分類: " + (context.errorClass || "未分類"),
+context.autoHandoffStatus ? "自動継続: " + context.autoHandoffStatus : "",
+"",
+"失敗理由:",
+explanation,
+raw ? "\n技術情報:\n" + raw : ""
+].filter(Boolean).join("\n");
 }
 
 function buildChatGptHandoff(job) {
