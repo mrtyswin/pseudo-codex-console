@@ -3952,29 +3952,9 @@ created.textContent = "作成 " + formatCreatedAt(job.createdAt);
   }, true);
 
   document.addEventListener("click", function (event) {
-    var toggle = event.target.closest && event.target.closest("[data-new-job-toggle]");
-    if (toggle) {
-      var panel = document.getElementById("new-job-panel");
-      if (panel) {
-        panel.hidden = !panel.hidden;
-        toggle.setAttribute("aria-expanded", panel.hidden ? "false" : "true");
-        if (!panel.hidden) {
-          var instruction = panel.querySelector('textarea[name="instruction"]');
-          if (instruction) instruction.focus();
-        }
-      }
-      return;
-    }
-
-    var close = event.target.closest && event.target.closest("[data-new-job-close]");
-    if (close) {
-      var newJobPanel = document.getElementById("new-job-panel");
-      if (newJobPanel) newJobPanel.hidden = true;
-      var opener = document.querySelector("[data-new-job-toggle]");
-      if (opener) opener.setAttribute("aria-expanded", "false");
-      return;
-    }
-
+    // The new-job toggle/close buttons are handled in client.js only. Two
+    // independent jobs each bound the same toggle here and there; both
+    // handlers flipped the hidden flag on one click and the button looked dead.
     var detailClose = event.target.closest && event.target.closest("[data-close-job-detail]");
     if (detailClose) {
       closeMobileDetail();
