@@ -325,6 +325,7 @@ assert.ok(clientScript.includes("node.open && node.matches('details.history-deta
 assert.ok(page.includes("data-copy-handoff"));
 assert.ok(page.includes("ChatGPT用引き継ぎをコピー"));
 assert.ok(page.includes("max-block-size:min(56dvh,32rem)"));
+assert.ok(page.includes("Pseudo Codex Console v0.1.3</span> · deployed 1234567"));
 assert.match(page, /登録: [0-9]{4}\/[0-9]{2}\/[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2} JST/);
 
 const transcriptResponse = await fetchWithRetry(
@@ -372,6 +373,8 @@ console.log("REQUEST_CONSOLE_ISOLATED_REGRESSION_OK " + token);
 async function main() {
 const temporaryRoot = fs.mkdtempSync(path.join(os.tmpdir(), "pseudo-codex-console-check-"));
 const dataPath = path.join(temporaryRoot, "jobs.json");
+const deployRevisionPath = path.join(temporaryRoot, "deployed-revision");
+fs.writeFileSync(deployRevisionPath, "1234567890abcdef\n", "utf8");
 const port = 20000 + crypto.randomInt(20000);
 baseUrl = "http://127.0.0.1:" + port;
 const appPath = process.env.APP_PATH || path.join(__dirname, "app.js");
@@ -379,6 +382,7 @@ const child = childProcess.spawn(process.execPath, [appPath], {
 env: Object.assign({}, process.env, {
 PORT: String(port),
 DATA_PATH: dataPath,
+DEPLOY_REVISION_PATH: deployRevisionPath,
 PSEUDO_CODEX_AUTO_HANDOFF_MAX: "1"
 }),
 stdio: ["ignore", "pipe", "pipe"]

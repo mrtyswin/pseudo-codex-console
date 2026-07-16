@@ -10,6 +10,9 @@ const crypto = require("node:crypto");
 const PORT = Number.parseInt(process.env.PORT || "8090", 10);
 const DATA_PATH = process.env.DATA_PATH || "/data/jobs.json";
 const HOME_PATH = process.env.HOME || process.env.USERPROFILE || process.cwd();
+const DEPLOY_REVISION_PATH =
+process.env.DEPLOY_REVISION_PATH ||
+path.join(HOME_PATH, ".local", "state", "pseudo-codex", "request-console.deployed-revision");
 const PROJECT_CONFIG_PATH = process.env.PROJECT_CONFIG_PATH ||
 path.join(HOME_PATH, ".config", "pseudo-codex", "projects.json");
 const RESULT_LOG_ROOT =
@@ -3893,6 +3896,19 @@ created.textContent = "作成 " + formatCreatedAt(job.createdAt);
 }());
 </script>`;
 
+function readDeployedRevision() {
+try {
+const revision = fs.readFileSync(DEPLOY_REVISION_PATH, "utf8").trim();
+if (/^[0-9a-f]{7,40}$/i.test(revision)) {
+return revision.slice(0, 7).toLowerCase();
+}
+} catch (_error) {
+// Created by the host deployment process.
+}
+
+return "unknown";
+}
+
 function renderPage(jobs, message) {
   const messageHtml = message
   ? '<div class="message" role="status">' + escapeHtml(message) + "</div>"
@@ -3903,6 +3919,7 @@ function renderPage(jobs, message) {
     return job.stage === "failed" || job.stage === "blocked";
   }).length;
   const completedCount = jobs.filter(function(job) { return job.stage === "completed"; }).length;
+  const deployedRevision = readDeployedRevision();
 
   return [
     "<!doctype html>",
@@ -3997,7 +4014,7 @@ function renderPage(jobs, message) {
     '<details class="settings-details" id="settings-section"><summary>プロジェクトを追加・更新</summary><div class="settings-content"><p class="helper">既存の設定項目と保存処理は変更していません。</p>', renderProjectConfigForm(), "</div></details>",
     "</section>",
     "</main>",
-    '<footer class="footer"><span>Pseudo Codex Console v0.1.3</span><span>3秒ごとに更新 · JST表示</span></footer>',
+    '<footer class="footer"><span><span>Pseudo Codex Console v0.1.3</span> · deployed ', escapeHtml(deployedRevision), '</span><span>3秒ごとに更新 · JST表示</span></footer>',
     "</div>",
     CLIENT_SCRIPT_TAG,
     CONSOLE_UI_SCRIPT,
