@@ -7,7 +7,7 @@
   "scripts": {
     "start": "node app.js",
     "check": "npm run check:console && npm run check:agent && npm run check:dispatcher",
-    "check:console": "node check.js && node tests/job-detail-ux.check.js && node tests/deploy-restart.check.js && node tests/version.check.js && node tests/preflight-no-continuation.check.js",
+    "check:console": "node check.js && node tests/job-detail-ux.check.js && node tests/deploy-restart.check.js && node tests/version.check.js && node tests/preflight-no-continuation.check.js && node tests/new-job-toggle-single-binding.check.js",
     "check:agent": "node tests/agent-no-sha.check.js && node tests/agent-malformed-edit.check.js && node tests/agent-controller.check.js && node tests/chatgpt-parallel.check.js && node tests/chatgpt-new-chat-route.check.js && node tests/settings-details.check.js && node tests/agent-github-direct.check.js && node tests/agent-verify-only.check.js && node tests/agent-host-native.check.js && node tests/agent-terminal-owner.check.js && node tests/agent-protocol-feedback.check.js && node tests/agent-patch-recount.check.js && node tests/agent-complete-marker.check.js",
     "check:dispatcher": "python3 tests/dispatcher-git.check.py && python3 tests/dispatcher-github-direct.check.py && python3 tests/dispatcher-config-reload.check.py && python3 tests/dispatcher-host-native.check.py && python3 tests/dispatcher-parallel.check.py && python3 tests/browser-restart-safety.check.py && python3 tests/dispatcher-primary-quarantine.check.py",
     "check:syntax": "node --check app.js && node --check agent/agent.js && node --check agent/chatgpt.js && node --check agent/fake-browser-client.js && node --check agent/mcp-server.js"
