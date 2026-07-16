@@ -70,6 +70,9 @@ try {
   assert.equal(result.status, 0, output);
   const calls = JSON.parse(fs.readFileSync(stateFile, "utf8")).calls;
   assert.ok(calls >= 3, `agent must keep going past the quoted-marker refusal (calls=${calls})`);
+  // The user-facing conclusion must be handed to the dispatcher so question
+  // jobs show their answer in the job result instead of only in the chat log.
+  assert.match(output, /===AGENT_FINAL===.*Verified fine/);
   console.log("AGENT_COMPLETE_MARKER_OK");
 } finally {
   fs.rmSync(root, { recursive: true, force: true });
