@@ -49,6 +49,17 @@ npm run check
 python3 -m py_compile dispatcher/dispatcher.py scripts/chatgpt-compose.py scripts/chatgpt-compose-bridge.py
 ```
 
+ブラウザで `http://127.0.0.1:8090/` を開き、現在の画面構成を確認します。
+
+- 上部に実行中・実行待ち・要対応・完了のKPIカードが表示される
+- 上部検索でジョブ名・プロジェクト名・ジョブIDを絞り込める
+- ジョブ一覧にジョブ名、作成日時、短縮ID、プロジェクト、状態、担当、更新日時が表示される
+- 状態フィルターと表示件数が動作する
+- 一覧の行を選択すると、右側に指示・ChatGPTとの会話・最終結果・ログ・変更履歴・操作が表示される
+- 「＋ 新規ジョブ」からプロジェクト、タイトル、指示を入力して登録できる
+- 画面は3秒ごとに更新され、日時はJSTで表示される
+- 幅780px以下では一覧が簡略化され、選択したジョブの詳細が全画面で開く
+
 ## Request-Console Self-Update
 
 `request-console` 自身の改修もブラウザ queue から登録できます。dispatcher は通常 workspace の `main` を直接編集せず、ジョブ専用の Git worktree と branch で変更・検証・公開を行います。GitHub `main` への反映後、Ubuntu `main` は `pull --ff-only` とテストと deploy だけを担当します。
