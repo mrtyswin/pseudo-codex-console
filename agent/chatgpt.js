@@ -51,6 +51,11 @@ const SESSION_FILE     = path.join(os.homedir(), '.chatgpt-poc-session');
 const DAEMON_FILE      = path.join(os.homedir(), '.chatgpt-poc-daemon.json');
 const DAEMON_LOG       = path.join(os.homedir(), '.chatgpt-poc-daemon.log');
 const CHATGPT_URL      = 'https://chatgpt.com';
+const DEFAULT_CHATGPT_PROJECT_URL =
+  'https://chatgpt.com/g/g-p-6a51a220047c8191882bd0789ea42708-ubuntu-pseudo-codex/project';
+const CHATGPT_PROJECT_URL = String(
+  process.env.CHATGPT_PROJECT_URL || DEFAULT_CHATGPT_PROJECT_URL
+).trim().replace(/\/+$/, '');
 const RESPONSE_TIMEOUT = Number.parseInt(
   process.env.CHATGPT_RESPONSE_TIMEOUT_MS || '60000',
   10
@@ -67,10 +72,55 @@ function readSessionUrl(sessionFile) {
 }
 
 function newChatUrl() {
-  // ChatGPT redirects GPT project paths to their non-chat /project view.
-  // That page can render a textarea but does not create a conversation, so
-  // every isolated job must begin at the normal conversation endpoint.
-  return CHATGPT_URL;
+  return CHATGPT_PROJECT_URL || CHATGPT_URL;
+}
+
+async function enterConfiguredProjectChat(page, log) {
+  if (!CHATGPT_PROJECT_URL) return;
+
+  const configuredUrl = new URL(CHATGPT_PROJECT_URL);
+  const currentUrl = new URL(page.url());
+  const configuredPath = configuredUrl.pathname.replace(/\/+$/, '');
+  const currentPath = currentUrl.pathname.replace(/\/+$/, '');
+
+  if (
+    currentUrl.origin !== configuredUrl.origin ||
+    currentPath !== configuredPath
+  ) {
+    return;
+  }
+
+  const clicked = await page.evaluate(() => {
+    const candidates = Array.from(
+      document.querySelectorAll('button, a[role="button"]')
+    );
+    const target = candidates.find(node => {
+      const label = String(
+        node.innerText || node.getAttribute('aria-label') || ''
+      ).trim();
+      return label === 'Chat' || label === 'チャット';
+    });
+    if (!target) return false;
+    target.click();
+    return true;
+  });
+
+  if (!clicked) {
+    throw new Error('CHATGPT_PROJECT_CHAT_BUTTON_UNAVAILABLE');
+  }
+
+  log('Opening a new chat inside the configured ChatGPT project');
+  await page.waitForFunction(
+    projectPath => {
+      const currentPath = window.location.pathname.replace(/\/+$/, '');
+      return (
+        currentPath !== projectPath &&
+        !!document.querySelector('#prompt-textarea')
+      );
+    },
+    { timeout: 20_000 },
+    configuredPath
+  );
 }
 
 // ─── System prompt ────────────────────────────────────────────────────────────
@@ -755,10 +805,16 @@ async function startDaemonProcess() {
             const currentUrl = page.url();
             if (newChat) {
               log(`Starting new chat for sessionKey=${key}`);
-              await navigateSessionPage(
-                page,
-                activeSessionFile === SESSION_FILE ? CHATGPT_URL : newChatUrl()
-              );
+              await withBrowserInteraction(page, async () => {
+                await navigateWithRetry(
+                  page,
+                  newChatUrl(),
+                  log
+                );
+                if (!browserClient) {
+                  await enterConfiguredProjectChat(page, log);
+                }
+              });
             } else if (currentUrl !== sessionUrl) {
               log(`Switching session ${key} to ${sessionUrl}`);
               await navigateSessionPage(page, sessionUrl);
