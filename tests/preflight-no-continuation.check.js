@@ -119,7 +119,19 @@ assert.equal((await continuationsOf(usageLimit.id)).length, 0,
 "usage limit failure must not create a continuation job");
 assert.match(usageLimitFailed.autoHandoffStatus, /自動継続なし/);
 
-// 4. A normal implementation failure must still create exactly one continuation.
+// 4. Deployment configuration failures cannot be repaired by rerunning the
+// implementation in a new conversation.
+const deploymentConfig = await createJob("Deployment config " + token);
+await claim();
+const deploymentConfigFailed = await failJob(deploymentConfig.id, {
+lastError: "GIT_PUBLISH_NOT_CONFIGURED"
+});
+assert.equal(deploymentConfigFailed.stage, "failed");
+assert.equal((await continuationsOf(deploymentConfig.id)).length, 0,
+"deployment configuration failure must not create a continuation job");
+assert.match(deploymentConfigFailed.autoHandoffStatus, /自動継続なし/);
+
+// 5. A normal implementation failure must still create exactly one continuation.
 const normal = await createJob("Normal failure " + token);
 await claim();
 const normalFailed = await failJob(normal.id, {

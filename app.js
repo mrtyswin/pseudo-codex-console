@@ -3008,6 +3008,9 @@ const NON_CONTINUABLE_FAILURE_PATTERN = new RegExp([
 "AGENT_LAUNCH_FAILED",
 "Dispatcher rejected the project path",
 "Dispatcher preflight failed",
+"GIT_PUBLISH_NOT_CONFIGURED",
+"AUTO_DEPLOY_CONFIG_ERROR",
+"Automatic production deployment or verification failed",
 "MODEL_USAGE_LIMIT",
 "Model usage limit detected",
 "CHATGPT_THROTTLED"

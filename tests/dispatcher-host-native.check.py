@@ -84,6 +84,20 @@ with tempfile.TemporaryDirectory() as temporary:
     assert job_workspace == resolved
     assert git_context is None
 
+    # A host-native project may deploy directly from its workspace without Git.
+    # This used to return GIT_PUBLISH_NOT_CONFIGURED after otherwise successful
+    # jobs, guaranteeing a failed deployment and an unnecessary continuation.
+    publish_ok, publish_detail = module.publish_git_changes(
+        {"id": "host-native", "project": "request-console"},
+        None,
+        {
+            "requiresDeployment": True,
+            "deployCommand": "/usr/local/libexec/example-deploy",
+        },
+    )
+    assert publish_ok is True
+    assert publish_detail == "GIT_DISABLED_LOCAL_WORKSPACE"
+
     verify_config = dict(config["request-console"], executionMode="verify_only")
     assert module.prepare_job_workspace(
         {"id": "verify-only", "project": "request-console"},

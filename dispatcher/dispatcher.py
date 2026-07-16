@@ -457,9 +457,11 @@ def publish_git_changes(
     project_name = str(job.get("project", ""))
     project_config = project_config or get_project_config(project_name)
     if context is None:
-        if project_config.get("requiresDeployment", False):
-            return False, "GIT_PUBLISH_NOT_CONFIGURED"
-        return True, "GIT_DISABLED"
+        # Local projects are allowed to deploy directly from their configured
+        # workspace.  Deployment and Git publication are independent options;
+        # treating "deploy enabled, Git disabled" as an error made every such
+        # job fail only after its implementation had succeeded.
+        return True, "GIT_DISABLED_LOCAL_WORKSPACE"
 
     worktree = Path(context["worktree"])
     source = Path(context["source"])
