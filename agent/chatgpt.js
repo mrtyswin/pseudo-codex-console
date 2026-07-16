@@ -90,37 +90,45 @@ async function enterConfiguredProjectChat(page, log) {
     return;
   }
 
+  // The project landing page exposes the composer directly: typing there
+  // starts a new chat inside the project, no button needed. Requiring a
+  // "Chat" button here failed every job on the real UI.
+  const composerReady = await page
+    .waitForSelector('#prompt-textarea', { timeout: 8_000 })
+    .then(() => true)
+    .catch(() => false);
+  if (composerReady) {
+    log('Project composer is ready; the new chat will start inside the project.');
+    return;
+  }
+
   const clicked = await page.evaluate(() => {
     const candidates = Array.from(
-      document.querySelectorAll('button, a[role="button"]')
+      document.querySelectorAll('button, a[role="button"], a[href]')
     );
     const target = candidates.find(node => {
       const label = String(
         node.innerText || node.getAttribute('aria-label') || ''
       ).trim();
-      return label === 'Chat' || label === 'チャット';
+      return /^(chat|チャット|new chat.*|新しいチャット.*)$/i.test(label);
     });
     if (!target) return false;
     target.click();
     return true;
   });
-
-  if (!clicked) {
-    throw new Error('CHATGPT_PROJECT_CHAT_BUTTON_UNAVAILABLE');
+  if (clicked) {
+    log('Opening a new chat inside the configured ChatGPT project');
+    await page
+      .waitForSelector('#prompt-textarea', { timeout: 15_000 })
+      .catch(() => {});
+    if (await page.$('#prompt-textarea')) return;
   }
 
-  log('Opening a new chat inside the configured ChatGPT project');
-  await page.waitForFunction(
-    projectPath => {
-      const currentPath = window.location.pathname.replace(/\/+$/, '');
-      return (
-        currentPath !== projectPath &&
-        !!document.querySelector('#prompt-textarea')
-      );
-    },
-    { timeout: 20_000 },
-    configuredPath
-  );
+  // Degrade instead of failing the job: a chat outside the project is far
+  // better than no chat at all.
+  log('Project chat entry not found; falling back to a standard new chat.');
+  await page.goto(CHATGPT_URL, { waitUntil: 'domcontentloaded', timeout: 30_000 });
+  await page.waitForSelector('#prompt-textarea', { timeout: 20_000 });
 }
 
 // ─── System prompt ────────────────────────────────────────────────────────────
