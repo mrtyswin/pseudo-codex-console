@@ -1186,12 +1186,37 @@ function recoveryInfo(job) {
   return values.length ? '<div class="recovery-info">' + values.join('<br>') + '</div>' : '';
 }
 
+function jobRowSummary(job) {
+  var stateLabels = {
+    queued: '実行待ち',
+    sending_to_chatgpt: 'ChatGPTへ送信中',
+    waiting_chatgpt: 'ChatGPT応答待ち',
+    executing_command: 'コマンド実行中',
+    writing_file: 'ファイル更新中',
+    verifying: '検証中',
+    completed: '完了',
+    failed: '失敗',
+    stopped: '停止',
+    blocked: '保留'
+  };
+  var state = stateLabels[job.stage] || job.displayStatus || job.stage || '不明';
+  var owner = job.workerId || job.assignee || '未割当';
+  return '<div class="job-row-summary"><span class="job-identity"><strong>' +
+    escapeHtml(job.title || '無題') + '</strong><small class="job-created">作成 ' +
+    escapeHtml(formatDate(job.createdAt)) + '</small><small class="job-id">' +
+    escapeHtml(String(job.id || '').slice(0, 8)) + '</small></span><span class="job-project">' +
+    escapeHtml(job.project || '-') + '</span><span class="job-state stage-' +
+    escapeHtml(job.stage || 'queued') + '">' + escapeHtml(state) +
+    '</span><span class="job-worker">' + escapeHtml(owner) +
+    '</span><span class="job-updated">更新済み</span></div>';
+}
+
 function renderJob(job) {
   var phase = phaseDescription(job.phase || 'INSPECT');
   var runtime = job.workerId ? '<div class="runtime">Worker: ' + escapeHtml(job.workerId) +
     ' · PID: ' + escapeHtml(job.pid || '-') + ' · 最終heartbeat: ' + escapeHtml(formatDate(job.heartbeatAt)) + '</div>' : '';
   return '<article id="job-' + escapeHtml(job.id) + '" class="job" data-job-id="' + escapeHtml(job.id) + '" data-updated-at="' +
-    escapeHtml(job.updatedAt) + '"><div class="job-head"><div><h3>' + escapeHtml(job.title || '無題') +
+    escapeHtml(job.updatedAt) + '">' + jobRowSummary(job) + '<div class="job-head"><div><h3>' + escapeHtml(job.title || '無題') +
     '</h3><p class="meta">登録: ' + escapeHtml(formatDate(job.createdAt)) + ' · ' + escapeHtml(job.project) +
     ' · ' + escapeHtml(job.id) + '</p></div>' + badges(job) + '</div>' +
     '<div class="facts"><span>現在の状態: <strong>' + escapeHtml(job.displayStatus || job.stage) +
@@ -1213,6 +1238,12 @@ function renderJob(job) {
     detail(job.id, '実装方針を切り替えた履歴を表示', recoveryHistoryText(job.recoveryHistory), false) +
     detail(job.id, '再開時に使う作業メモを表示', job.checkpoint || '作業メモはまだありません。', false) +
     detail(job.id, '停止・失敗の理由を表示', humanErrorText(job.lastError), false) + historyDetail(job) + '</article>';
+}
+
+function renderJobListCard(job) {
+  return '<article id="job-' + escapeHtml(job.id) + '" class="job" data-job-id="' +
+    escapeHtml(job.id) + '" data-updated-at="' + escapeHtml(job.updatedAt) + '">' +
+    jobRowSummary(job) + '</article>';
 }
 
 function captureCard(card) {
@@ -1290,13 +1321,13 @@ async function refreshJobs() {
       if (existing && existing.dataset.updatedAt !== job.updatedAt && !userIsReading(existing)) {
         captureCard(existing);
         var wrapper = document.createElement('div');
-        wrapper.innerHTML = renderJob(job);
+        wrapper.innerHTML = renderJobListCard(job);
         var fresh = wrapper.firstElementChild;
         existing.replaceWith(fresh);
         existing = fresh;
       } else if (!existing) {
         var holder = document.createElement('div');
-        holder.innerHTML = renderJob(job);
+        holder.innerHTML = renderJobListCard(job);
         existing = holder.firstElementChild;
         var reference = container.children[index] || null;
         container.insertBefore(existing, reference);
@@ -1440,7 +1471,7 @@ if (search) search.addEventListener('input', applyFilters);
 if (statusFilter) statusFilter.addEventListener('change', applyFilters);
 void refreshJobs();
 setInterval(refreshJobs, 3000);
-window.__pseudoCodexClientV2 = {refreshJobs: refreshJobs, historyText: historyText};
+window.__pseudoCodexClientV2 = {refreshJobs: refreshJobs, historyText: historyText, renderJob: renderJob};
 }());`;
 
 let mutationChain = Promise.resolve();
@@ -3341,10 +3372,39 @@ job.currentTurn ? ' · ChatGPT turn: ' + escapeHtml(job.currentTurn) : "",
 ].join("");
 }
 
+function renderJobRowSummary(job) {
+const stageLabels = {
+queued: "実行待ち",
+sending_to_chatgpt: "ChatGPTへ送信中",
+waiting_chatgpt: "ChatGPT応答待ち",
+executing_command: "コマンド実行中",
+writing_file: "ファイル更新中",
+verifying: "検証中",
+completed: "完了",
+failed: "失敗",
+stopped: "停止",
+blocked: "保留"
+};
+const state = stageLabels[job.stage] || job.displayStatus || job.stage || "不明";
+const owner = job.workerId || job.assignee || "未割当";
+return [
+'<div class="job-row-summary">',
+'<span class="job-identity"><strong>', escapeHtml(job.title || "無題"), '</strong>',
+'<small class="job-created">作成 ', escapeHtml(formatDateForDisplay(job.createdAt)), '</small>',
+'<small class="job-id">', escapeHtml(String(job.id || "").slice(0, 8)), '</small></span>',
+'<span class="job-project">', escapeHtml(job.project || "-"), '</span>',
+'<span class="job-state stage-', escapeHtml(job.stage || "queued"), '">', escapeHtml(state), '</span>',
+'<span class="job-worker">', escapeHtml(owner), '</span>',
+'<span class="job-updated">更新済み</span>',
+'</div>'
+].join("");
+}
+
 function renderJobCard(job) {
 const phase = describePhase(job.phase);
 return [
 '<article id="job-', escapeHtml(job.id), '" class="job" data-job-id="', escapeHtml(job.id), '" data-updated-at="', escapeHtml(job.updatedAt), '">',
+renderJobRowSummary(job),
 '<div class="job-head">',
 "<div>",
 "<h3>",
@@ -3396,12 +3456,21 @@ renderHistoryDetails(job.id, job.history, false),
 ].join("");
 }
 
+function renderJobListCard(job) {
+return [
+'<article id="job-', escapeHtml(job.id), '" class="job" data-job-id="',
+escapeHtml(job.id), '" data-updated-at="', escapeHtml(job.updatedAt), '">',
+renderJobRowSummary(job),
+"</article>"
+].join("");
+}
+
 function renderJobs(jobs) {
 if (jobs.length === 0) {
 return '<p class="empty">登録済みジョブはありません。</p>';
 }
 
-return jobs.map(renderJobCard).join("");
+return jobs.map(renderJobListCard).join("");
 }
 
 function renderQueueSummary(jobs) {
@@ -3724,7 +3793,14 @@ created.textContent = "作成 " + formatCreatedAt(job.createdAt);
     selectedTitle.append(selectedLabel, selectedName);
     mobileHeading.append(closeButton, selectedState, selectedTitle);
 
-    var clone = card.cloneNode(true);
+    var clone = null;
+    var renderer = window.__pseudoCodexClientV2 && window.__pseudoCodexClientV2.renderJob;
+    if (typeof renderer === "function") {
+      var wrapper = document.createElement("div");
+      wrapper.innerHTML = renderer(selectedJob);
+      clone = wrapper.firstElementChild;
+    }
+    if (!clone) clone = card.cloneNode(true);
     clone.classList.add("detail-job");
     clone.classList.remove("is-selected");
     clone.hidden = false;
