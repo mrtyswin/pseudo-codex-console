@@ -11,8 +11,12 @@ assert.match(source, /process\.env\.CHATGPT_PROJECT_URL/);
 assert.match(source, /function newChatUrl\(\)/);
 assert.match(source, /return CHATGPT_PROJECT_URL \|\| CHATGPT_URL;/);
 assert.match(source, /async function enterConfiguredProjectChat\(page, log\)/);
-assert.match(source, /CHATGPT_PROJECT_CHAT_BUTTON_UNAVAILABLE/);
-assert.match(source, /label === 'Chat' \|\| label === 'チャット'/);
+// A missing project entry point must degrade to a standard new chat, not
+// fail the job (the strict button requirement killed jobs on the real UI).
+assert.doesNotMatch(source, /CHATGPT_PROJECT_CHAT_BUTTON_UNAVAILABLE/);
+assert.match(source, /falling back to a standard new chat/);
+assert.match(source, /Project composer is ready/);
+assert.match(source, /\^\(chat\|チャット\|new chat\.\*\|新しいチャット\.\*\)\$/);
 assert.match(source, /await navigateWithRetry\(/);
 assert.match(source, /if \(!browserClient\)/);
 assert.match(source, /if \(!browserClient\)[\s\S]*await enterConfiguredProjectChat\(page, log\)/);
