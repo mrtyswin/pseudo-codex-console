@@ -25,6 +25,10 @@ const WORKER_LOG_LIMIT = Number.parseInt(
 process.env.WORKER_LOG_LIMIT || "12000",
 10
 );
+const MAX_REQUEST_BODY_LENGTH = 36_000_000;
+const MAX_ATTACHMENT_COUNT = 10;
+const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024;
+const MAX_ATTACHMENT_TOTAL_BYTES = 25 * 1024 * 1024;
 const JST_DATE_FORMATTER = new Intl.DateTimeFormat("ja-JP", {
 year: "numeric",
 month: "2-digit",
@@ -1391,6 +1395,84 @@ document.addEventListener('scroll', function (event) {
   state.status = '更新停止中';
 }, true);
 
+function renderPastedAttachments(form) {
+  var list = form.querySelector('[data-pasted-attachments]');
+  if (!list) return;
+  var files = form._pastedFiles || [];
+  list.innerHTML = files.map(function (file, index) {
+    var size = file.size < 1024 * 1024
+      ? Math.max(1, Math.round(file.size / 1024)) + ' KB'
+      : (file.size / (1024 * 1024)).toFixed(1) + ' MB';
+    return '<li><span><strong>' + escapeHtml(file.name || 'clipboard-file') + '</strong><small>' + size + '</small></span><button type="button" data-remove-pasted-attachment="' + index + '" aria-label="添付を削除">×</button></li>';
+  }).join('');
+  list.hidden = files.length === 0;
+}
+
+function readFileAsBase64(file) {
+  return new Promise(function (resolve, reject) {
+    var reader = new FileReader();
+    reader.onload = function () {
+      var value = String(reader.result || '');
+      resolve({
+        name: file.name || 'clipboard-file',
+        type: file.type || 'application/octet-stream',
+        data: value.slice(value.indexOf(',') + 1)
+      });
+    };
+    reader.onerror = function () {
+      reject(reader.error || new Error('file read failed'));
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
+document.addEventListener('paste', function (event) {
+  var textarea = event.target.closest && event.target.closest('textarea[name="instruction"]');
+  if (!textarea || !event.clipboardData) return;
+
+  var pastedFiles = Array.from(event.clipboardData.files || []);
+  if (pastedFiles.length === 0) return;
+
+  var form = textarea.closest('form.new-job-form');
+  if (!form) return;
+
+  var nextFiles = (form._pastedFiles || []).concat(pastedFiles);
+  if (nextFiles.length > 10) {
+    window.alert('添付できるファイルは10件までです。');
+    return;
+  }
+  if (nextFiles.some(function (file) { return file.size > 10 * 1024 * 1024; })) {
+    window.alert('1ファイルの上限は10MBです。');
+    return;
+  }
+  if (nextFiles.reduce(function (total, file) {
+    return total + file.size;
+  }, 0) > 25 * 1024 * 1024) {
+    window.alert('添付ファイルの合計上限は25MBです。');
+    return;
+  }
+
+  form._pastedFiles = nextFiles;
+  renderPastedAttachments(form);
+}, true);
+
+document.addEventListener('click', function (event) {
+  var removeButton = event.target.closest && event.target.closest('[data-remove-pasted-attachment]');
+  if (!removeButton) return;
+
+  var form = removeButton.closest('form.new-job-form');
+  if (!form) return;
+
+  var index = Number.parseInt(removeButton.dataset.removePastedAttachment, 10);
+  var files = form._pastedFiles || [];
+  if (!Number.isInteger(index) || index < 0 || index >= files.length) return;
+
+  form._pastedFiles = files.filter(function (_file, fileIndex) {
+    return fileIndex !== index;
+  });
+  renderPastedAttachments(form);
+}, true);
+
 document.addEventListener('submit', async function (event) {
   var form = event.target.closest && event.target.closest('form.new-job-form');
   if (!form) return;
@@ -1406,13 +1488,18 @@ document.addEventListener('submit', async function (event) {
   }
 
   try {
+    var payload = Object.fromEntries(new FormData(form).entries());
+    payload.attachments = await Promise.all(
+      (form._pastedFiles || []).map(readFileAsBase64)
+    );
+
     var response = await fetch(form.action || '/jobs', {
       method: 'POST',
       headers: {
         Accept: 'application/json',
-        'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8'
+        'Content-Type': 'application/json;charset=UTF-8'
       },
-      body: new URLSearchParams(new FormData(form)).toString(),
+      body: JSON.stringify(payload),
       credentials: 'same-origin'
     });
     if (!response.ok) throw new Error('job creation failed');
@@ -2520,7 +2607,7 @@ request.on("data", function(chunk) {
 
   body += chunk;
 
-  if (body.length > 1000000) {
+  if (body.length > MAX_REQUEST_BODY_LENGTH) {
     rejected = true;
     reject(new Error("request body too large"));
     request.destroy();
@@ -2576,11 +2663,47 @@ return normalized
 function parseJobRequest(request, body) {
 const value = parseBody(request, body);
 const instruction = String(value.instruction || "").trim();
+const rawAttachments = Array.isArray(value.attachments) ? value.attachments : [];
+
+if (rawAttachments.length > MAX_ATTACHMENT_COUNT) {
+throw new Error("too many attachments");
+}
+
+const attachments = rawAttachments.map(function(attachment, index) {
+if (!attachment || typeof attachment !== "object" || Array.isArray(attachment)) {
+throw new Error("invalid attachment");
+}
+
+const data = String(attachment.data || "");
+if (!data || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(data)) {
+throw new Error("invalid attachment data");
+}
+
+const buffer = Buffer.from(data, "base64");
+if (buffer.length === 0 || buffer.length > MAX_ATTACHMENT_BYTES) {
+throw new Error("attachment is empty or too large");
+}
+
+return {
+name: String(attachment.name || "clipboard-file-" + (index + 1)).slice(0, 255),
+type: String(attachment.type || "application/octet-stream").slice(0, 200),
+buffer
+};
+});
+
+const totalAttachmentBytes = attachments.reduce(function(total, attachment) {
+return total + attachment.buffer.length;
+}, 0);
+
+if (totalAttachmentBytes > MAX_ATTACHMENT_TOTAL_BYTES) {
+throw new Error("attachments are too large");
+}
 
 return {
 project: String(value.project || DEFAULT_PROJECT).trim(),
 title: String(value.title || "").trim() || deriveJobTitle(instruction),
 instruction,
+attachments,
 kind: value.kind === "test" || value.isTest === true ? "test" : "job"
 };
 }
@@ -2745,12 +2868,41 @@ preflight: value.preflight === true
 };
 }
 
-function createJob(project, title, instruction, kind) {
+function sanitizeAttachmentName(value, index) {
+const basename = path.basename(String(value || "clipboard-file-" + (index + 1)));
+const sanitized = basename
+.replace(/[\u0000-\u001f<>:"\/\\|?*]/g, "_")
+.replace(/^\.+/, "")
+.trim();
+
+return String(index + 1).padStart(2, "0") + "-" + (sanitized || "clipboard-file");
+}
+
+function persistJobAttachments(jobId, attachments) {
+if (attachments.length === 0) return [];
+
+const directory = path.join(RESULT_LOG_ROOT, jobId, "attachments");
+fs.mkdirSync(directory, { recursive: true });
+
+return attachments.map(function(attachment, index) {
+const filePath = path.join(directory, sanitizeAttachmentName(attachment.name, index));
+fs.writeFileSync(filePath, attachment.buffer, { flag: "wx" });
+return filePath;
+});
+}
+
+function createJob(project, title, instruction, kind, attachments) {
 const now = new Date().toISOString();
 const assignment = deriveAssignment("queued");
+const id = crypto.randomUUID();
+const attachmentPaths = persistJobAttachments(id, attachments || []);
+const storedInstruction = attachmentPaths.length === 0
+? instruction
+: instruction + "\n\n参考ファイル（クリップボード貼り付け）:\n" +
+attachmentPaths.map(function(filePath) { return "- " + filePath; }).join("\n");
 
 const job = {
-id: crypto.randomUUID(),
+id,
 project,
 createdAt: now,
 updatedAt: now,
@@ -2758,7 +2910,7 @@ attempts: 0,
 lastError: "",
 workerLog: "",
 title,
-instruction,
+instruction: storedInstruction,
 kind: kind === "test" ? "test" : "job",
 isTest: kind === "test",
 status: "queued",
@@ -4269,7 +4421,7 @@ function renderPage(jobs, message) {
     '<div class="panel-heading"><div><h2>新規ジョブ</h2><p>タイトルは指示の先頭行から自動生成します。</p></div><button type="button" class="icon-button" data-new-job-close aria-label="閉じる">×</button></div>',
     '<form method="post" action="/jobs" class="new-job-form">',
     '<div class="field"><label for="project">プロジェクト</label><select id="project" name="project" required>', renderProjectOptions(), '</select></div>',
-    '<div class="field" style="grid-column:1/-1"><label for="instruction">詳細な自然言語指示</label><textarea id="instruction" name="instruction" maxlength="20000" required></textarea></div>',
+    '<div class="field" style="grid-column:1/-1"><label for="instruction">詳細な自然言語指示</label><textarea id="instruction" name="instruction" maxlength="20000" required></textarea><small style="display:block;margin-top:6px;color:#64748b;font-size:.65rem">この欄へスクリーンショットやファイルを貼り付けると、そのまま添付できます。</small><ul data-pasted-attachments hidden style="display:grid;gap:6px;margin:8px 0 0;padding:0;list-style:none"></ul></div>',
     '<div class="submit-field" style="grid-column:1/-1"><button type="submit" class="primary-button">キューへ登録</button></div>',
     "</form>",
     "</section>",
@@ -4821,7 +4973,8 @@ await readBody(request)
     values.project,
     values.title,
     values.instruction,
-    values.kind
+    values.kind,
+    values.attachments
   );
 
   const acceptsJson =
