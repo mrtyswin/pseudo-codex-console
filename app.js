@@ -1468,6 +1468,9 @@ document.addEventListener('submit', async function (event) {
 
   var submitButton = form.querySelector('button[type="submit"]');
   var originalLabel = submitButton ? submitButton.textContent : '';
+  var requestController = new AbortController();
+  var timeoutId;
+
   form.dataset.submitting = 'true';
   if (submitButton) {
     submitButton.disabled = true;
@@ -1480,6 +1483,10 @@ document.addEventListener('submit', async function (event) {
       (form._pastedFiles || []).map(readFileAsBase64)
     );
 
+    timeoutId = window.setTimeout(function () {
+      requestController.abort();
+    }, 30000);
+
     var response = await fetch(form.action || '/jobs', {
       method: 'POST',
       headers: {
@@ -1487,17 +1494,24 @@ document.addEventListener('submit', async function (event) {
         'Content-Type': 'application/json;charset=UTF-8'
       },
       body: JSON.stringify(payload),
-      credentials: 'same-origin'
+      credentials: 'same-origin',
+      signal: requestController.signal
     });
     if (!response.ok) throw new Error('job creation failed');
-    window.location.assign('/?created=1');
-  } catch (_error) {
+    window.location.assign('/?created=' + encodeURIComponent((await response.json()).id));
+  } catch (error) {
     form.dataset.submitting = 'false';
     if (submitButton) {
       submitButton.disabled = false;
       submitButton.textContent = originalLabel;
     }
-    window.alert('キューへの登録に失敗しました。');
+    window.alert(
+      error && error.name === 'AbortError'
+        ? '登録処理が30秒以内に完了しませんでした。もう一度実行してください。'
+        : 'キューへの登録に失敗しました。'
+    );
+  } finally {
+    window.clearTimeout(timeoutId);
   }
 }, true);
 
