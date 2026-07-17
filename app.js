@@ -3698,14 +3698,31 @@ return entry.at || job.updatedAt;
 return job.updatedAt;
 }
 
+function jobStartedAt(job) {
+const history = Array.isArray(job.history) ? job.history : [];
+for (let index = 0; index < history.length; index += 1) {
+const entry = history[index];
+if (entry && entry.stage && entry.stage !== "queued") {
+return entry.at || job.updatedAt;
+}
+}
+return job.status === "running"
+? job.activityAt || job.updatedAt
+: null;
+}
+
 function formatJobDuration(job, now) {
-const createdAt = new Date(job.createdAt).getTime();
+const startedAt = jobStartedAt(job);
 const finishedAt = jobFinishedAt(job);
+if (!startedAt) {
+return job.stage === "queued" ? "開始待ち" : "経過時間不明";
+}
+const startedTime = new Date(startedAt).getTime();
 const endAt = finishedAt ? new Date(finishedAt).getTime() : Number(now || Date.now());
-if (!Number.isFinite(createdAt) || !Number.isFinite(endAt)) {
+if (!Number.isFinite(startedTime) || !Number.isFinite(endAt)) {
 return finishedAt ? "所要時間不明" : "経過時間不明";
 }
-const totalMinutes = Math.max(0, Math.floor((endAt - createdAt) / 60000));
+const totalMinutes = Math.max(0, Math.floor((endAt - startedTime) / 60000));
 const label = finishedAt ? "所要 " : "経過 ";
 if (totalMinutes < 1) {
 return label + "1分未満";

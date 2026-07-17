@@ -104,6 +104,12 @@ assert.equal(completedClaimed.stage, "sending_to_chatgpt");
 assert.equal(completedClaimed.workerId, "check-worker");
 assert.ok(completedClaimed.leaseExpiresAt);
 
+const durationPage = await fetchWithRetry("/", { method: "GET" }).then(function(response) {
+return response.text();
+});
+assert.match(extractJobCard(durationPage, autoTitled.id), /開始待ち/);
+assert.match(extractJobCard(durationPage, completedCreated.id), /経過 1分未満/);
+
 const verifying = await postJson("/api/jobs/" + completedCreated.id + "/progress", {
 stage: "verifying",
 message: "結果を検証 turn=3",
