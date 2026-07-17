@@ -3867,9 +3867,14 @@ const gitMode = summary.git.enabled
 ? (summary.git.push ? "GitHub正本・push有効" : "Git管理あり・push無効")
 : "ローカル作業のみ";
 const deployMode = summary.requiresDeployment
-? (summary.deployCommand ? "ホスト反映あり" : "要反映だが deployCommand 未設定")
-: "反映不要";
+? (summary.deployCommand ? "本番へ自動反映" : "本番反映が必要だがコマンド未設定")
+: "本番へ反映しない";
 const healthHref = projectHealthHref(summary.healthUrl);
+const deploymentNote = summary.requiresDeployment
+? (summary.deployCommand
+? '<div class="project-note"><strong>本番運用:</strong> ジョブ成功後、本番反映・反映確認まで自動実行します。</div>'
+: '<div class="project-note"><strong>設定不備:</strong> 本番反映を有効にしていますが、本番反映コマンドが未設定です。</div>')
+: '<div class="project-note"><strong>非本番:</strong> 作業と検証で終了し、本番には反映しません。E2E・smoke・検証専用以外の通常プロジェクトなら、本番自動反映を有効にしてください。</div>';
 const note = summary.codexCliOnly
 ? '<div class="project-note"><strong>固定ルール:</strong> 自己改修は Ubuntu の Codex CLI で専用 branch / PR を作成します。Ubuntu main は GitHub main を pull --ff-only し、同一 commit だけを deploy します。このコンソールのブラウザ agent は自己改修に使用しません。</div>'
 : "";
@@ -3884,6 +3889,7 @@ healthHref ? '<a href="' + escapeHtml(healthHref) + '" data-project-health-url="
 summary.productionRoot ? '<div class="project-facts"><span>Production Root: <strong>' + escapeHtml(summary.productionRoot) + '</strong></span></div>' : "",
 summary.service ? '<div class="project-facts"><span>Service: <strong>' + escapeHtml(summary.service) + '</strong></span></div>' : "",
 summary.git.enabled ? '<div class="project-facts"><span>Repository: <strong>' + escapeHtml(summary.git.repository || "(未設定)") + '</strong></span><span>Remote: <strong>' + escapeHtml(summary.git.remote) + '</strong></span><span>Base: <strong>' + escapeHtml(summary.git.baseBranch) + '</strong></span><span>Branch Prefix: <strong>' + escapeHtml(summary.git.branchPrefix) + '</strong></span><span>Deploy Source: <strong>' + escapeHtml(summary.githubFirst ? "GitHub main only" : "workspace") + '</strong></span></div>' : "",
+deploymentNote,
 note,
 '</article>'
 ].join("");
@@ -3927,7 +3933,7 @@ return [
 '<div><label for="project-config-owner">反映を実行する担当 <span class="field-optional">通常は変更不要</span></label><input id="project-config-owner" name="deploymentOwner" maxlength="100" placeholder="host_dispatcher"><small class="field-help">通常はhost_dispatcherです。別の実行担当を用意している場合だけ変更します。</small></div>',
 '</div>',
 '<div class="checkbox-row"><label><input type="checkbox" name="requiresDeployment" value="true"> テスト成功後、この設定を使って本番へ自動反映する</label></div>',
-'<p class="helper"><strong>迷う場合はすべて空欄・チェックなしで保存します。</strong> 自動反映が必要な場合だけ、そのプロジェクトですでに使用中の本番パス・サービス名・コマンドを入力します。</p>',
+'<p class="helper"><strong>実際に利用するWebアプリやサービスは、原則として本番自動反映を有効にします。</strong> チェックなしにするのは、E2E・smoke・調査・検証だけを行う専用プロジェクトです。本番パス・反映コマンド・確認方法が未整備なら、先にそれらを用意してから有効にします。</p>',
 '</section>',
 '<section class="config-section">',
 '<div class="config-section-head"><h3>3. GitHub / Git 運用</h3><p>すでにGitHubで管理しているリポジトリを使う場合だけ有効にします。ここでGitHubアカウントや認証情報を新規登録することはありません。</p></div>',
@@ -4480,7 +4486,7 @@ function renderPage(jobs, message) {
     "</section>",
     '<section class="settings-area" id="projects-section">',
     '<details class="settings-details" open><summary><span class="settings-summary-copy"><strong>既存のWordPressを触ってほしいとき</strong><small>登録済みなら選ぶだけ。未登録なら最初の1回だけ設定</small></span><span class="settings-summary-badge">操作手順</span></summary><div class="settings-content"><p class="settings-intro"><strong>登録済みの場合:</strong> 画面上部の「新規ジョブ」を開き、WordPressのプロジェクト名を選んで、直してほしい内容を書きます。</p><ol class="settings-flow"><li><span>1</span>未登録なら「プロジェクトを追加・設定を更新」を開く</li><li><span>2</span>WordPressが存在するUbuntu Workspace Pathを保存する</li><li><span>3</span>「新規ジョブ」で保存したプロジェクトを選び、指示を登録する</li></ol></div></details>',
-    '<details class="settings-details"><summary><span class="settings-summary-copy"><strong>登録済みプロジェクトを確認</strong><small>実行場所・実行方式・デプロイ設定の現在値を見る</small></span><span class="settings-summary-badge">閲覧のみ</span></summary><div class="settings-content"><p class="settings-intro"><strong>ここでは設定を変更しません。</strong> 新規ジョブでプロジェクトを選ぶと、下記のWorkspace・実行方式・Git・デプロイ設定が自動的に適用されます。</p><div class="project-grid">', renderProjectCatalog(), "</div></div></details>",
+    '<details class="settings-details"><summary><span class="settings-summary-copy"><strong>登録済みプロジェクトを確認</strong><small>本番へ反映するかを含む、現在の設定を見る</small></span><span class="settings-summary-badge">閲覧のみ</span></summary><div class="settings-content"><p class="settings-intro"><strong>各カードの「配備」と説明で、本番へ反映するプロジェクトか、作業・検証だけで終了するプロジェクトかを確認できます。</strong> 新規ジョブでは、選択したプロジェクトのWorkspace・実行方式・Git・本番反映設定が自動的に適用されます。</p><div class="project-grid">', renderProjectCatalog(), "</div></div></details>",
     '<details class="settings-details" id="settings-section"><summary><span class="settings-summary-copy"><strong>プロジェクトを追加・設定を更新</strong><small>新しい実行先の登録、または既存プロジェクトの設定変更</small></span><span class="settings-summary-badge">保存すると反映</span></summary><div class="settings-content"><p class="settings-intro"><strong>新規追加と更新は同じフォームです。</strong> 新しいプロジェクト名なら追加され、登録済みと同じ名前ならその設定を更新します。</p><ol class="settings-flow"><li><span>1</span>プロジェクト名・Workspace・実行方式を決める</li><li><span>2</span>必要な場合だけデプロイとGitを設定する</li><li><span>3</span>保存後、新規ジョブでそのプロジェクトを選ぶ</li></ol>', renderProjectConfigForm(), "</div></details>",
     "</section>",
     "</main>",
