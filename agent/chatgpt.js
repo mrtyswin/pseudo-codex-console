@@ -64,6 +64,11 @@ const RECOVERY_RESPONSE_TIMEOUT = Number.parseInt(
   process.env.CHATGPT_RECOVERY_TIMEOUT_MS || '60000',
   10
 );
+const MESSAGE_LIMIT_TOOLTIP_TEXT = 'メッセージの上限に到達しました';
+const MESSAGE_LIMIT_TOOLTIP_WAIT_MS = Number.parseInt(
+  process.env.PSEUDO_CODEX_MESSAGE_LIMIT_TOOLTIP_WAIT_MS || '400',
+  10
+);
 
 function readSessionUrl(sessionFile) {
   return fs.existsSync(sessionFile)
@@ -409,9 +414,68 @@ async function waitForEnabledSendButton(page) {
   );
 }
 
+function findMessageLimitTooltipText(candidates) {
+  for (const candidate of Array.isArray(candidates) ? candidates : []) {
+    const text = String(candidate || '').replace(/\s+/g, ' ').trim();
+    if (text.includes(MESSAGE_LIMIT_TOOLTIP_TEXT)) return text;
+  }
+  return null;
+}
+
+async function detectSendButtonHoverLimit(page) {
+  const button = await page.$('button[data-testid="send-button"]').catch(() => null);
+  if (!button) return null;
+
+  try {
+    await button.hover();
+    await new Promise(resolve => setTimeout(resolve, MESSAGE_LIMIT_TOOLTIP_WAIT_MS));
+  } catch {
+    return null;
+  }
+
+  const candidates = await page.evaluate(() => {
+    const sendButton = document.querySelector('button[data-testid="send-button"]');
+    const describedByIds = String(sendButton?.getAttribute('aria-describedby') || '')
+      .split(/\s+/)
+      .filter(Boolean);
+    const describedNodes = describedByIds
+      .map(id => document.getElementById(id))
+      .filter(Boolean);
+    const tooltipNodes = [
+      ...document.querySelectorAll('[role="tooltip"]'),
+      ...document.querySelectorAll('[data-radix-popper-content-wrapper]'),
+      ...document.querySelectorAll('[data-state="open"]'),
+    ];
+    const nodeText = [...new Set([...describedNodes, ...tooltipNodes])]
+      .filter(node => {
+        const style = window.getComputedStyle(node);
+        return style.display !== 'none' && style.visibility !== 'hidden';
+      })
+      .map(node => (node.innerText || node.textContent || '').trim());
+    const buttonText = sendButton
+      ? [
+          sendButton.getAttribute('title'),
+          sendButton.getAttribute('aria-label'),
+          sendButton.getAttribute('data-tooltip'),
+        ]
+      : [];
+    return [...nodeText, ...buttonText].filter(Boolean);
+  }).catch(() => []);
+
+  return findMessageLimitTooltipText(candidates);
+}
+
+function createMessageLimitError(text) {
+  const error = new Error(`CHATGPT_MESSAGE_LIMIT: ${text}`);
+  error.code = 'CHATGPT_MESSAGE_LIMIT';
+  return error;
+}
+
 async function submitPrompt(page, fullPrompt, log) {
   await respectThrottleBackoff(log);
   await fillTextarea(page, fullPrompt);
+  const initialHoverLimit = await detectSendButtonHoverLimit(page);
+  if (initialHoverLimit) throw createMessageLimitError(initialHoverLimit);
   try {
     await waitForEnabledSendButton(page);
   } catch (_firstWait) {
@@ -420,6 +484,8 @@ async function submitPrompt(page, fullPrompt, log) {
     // into CHATGPT_SEND_BUTTON_UNAVAILABLE. Clear/wait out the throttle, then
     // give the button one more chance.
     await throwIfUsageLimited(page, log);
+    const hoverLimit = await detectSendButtonHoverLimit(page);
+    if (hoverLimit) throw createMessageLimitError(hoverLimit);
     await waitForEnabledSendButton(page).catch(() => {
       throw new Error('CHATGPT_SEND_BUTTON_UNAVAILABLE after prompt input');
     });
@@ -894,7 +960,10 @@ async function startDaemonProcess() {
           send(200, result);
         } catch (err) {
           log(`Error: ${err.message}`);
-          if (requestSessionKey) {
+          // A message-cap tooltip is an expected, job-local pause signal. Keep
+          // this page/session alive so the same job can retry after its wait,
+          // while unrelated browser sessions continue normally.
+          if (requestSessionKey && err.code !== 'CHATGPT_MESSAGE_LIMIT') {
             const failedSession = sessions.get(requestSessionKey);
             sessions.delete(requestSessionKey);
             try {

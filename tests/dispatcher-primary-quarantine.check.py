@@ -31,7 +31,9 @@ def main() -> None:
     try:
         source = root / "workspace"
         state = root / "state"
+        project_config = root / "projects.json"
         source.mkdir(parents=True)
+        project_config.write_text("{}\n", encoding="utf-8")
         git(source, "init", "-b", "main")
         git(source, "config", "user.name", "Pseudo Codex Test")
         git(source, "config", "user.email", "pseudo-codex@example.invalid")
@@ -41,6 +43,7 @@ def main() -> None:
 
         os.environ.update({
             "PSEUDO_CODEX_STATE_DIR": str(state),
+            "PSEUDO_CODEX_PROJECT_CONFIG": str(project_config),
         })
         dispatcher_path = Path(os.environ.get(
             "DISPATCHER_PATH",

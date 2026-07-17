@@ -23,6 +23,10 @@ assert.match(source, /if \(!browserClient\)[\s\S]*await enterConfiguredProjectCh
 assert.match(source, /button\[data-testid="send-button"\]/);
 assert.match(source, /Submitted via send button/);
 assert.match(source, /CHATGPT_SEND_BUTTON_UNAVAILABLE after prompt input/);
+assert.match(source, /const MESSAGE_LIMIT_TOOLTIP_TEXT = 'メッセージの上限に到達しました';/);
+assert.match(source, /await button\.hover\(\)/);
+assert.match(source, /\[role="tooltip"\]/);
+assert.match(source, /err\.code !== 'CHATGPT_MESSAGE_LIMIT'/);
 assert.doesNotMatch(source, /keyboard\.press\(['"]Enter['"]\)/);
 assert.match(source, /keyboard\.type\(text, \{ delay: 0 \}\)/);
 assert.match(source, /range\.selectNodeContents\(composer\)/);
@@ -99,6 +103,19 @@ assert.equal(
   usageDetection.findUsageLimitText(["Ordinary conversation without a system notice."]),
   null
 );
+
+const messageLimitDetectionSource = source.slice(
+  source.indexOf("const MESSAGE_LIMIT_TOOLTIP_TEXT"),
+  source.indexOf("async function detectSendButtonHoverLimit")
+);
+const findMessageLimitTooltipText = new Function(
+  `${messageLimitDetectionSource}\nreturn findMessageLimitTooltipText;`
+)();
+assert.equal(
+  findMessageLimitTooltipText(["メッセージの上限に到達しました"]),
+  "メッセージの上限に到達しました"
+);
+assert.equal(findMessageLimitTooltipText(["メッセージを送信する"]), null);
 (async () => {
   const fromConversationOnly = await usageDetection.detectUsageLimit({
     evaluate: async () => [],
