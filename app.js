@@ -3613,18 +3613,7 @@ escapeHtml(name) + "</option>";
 }
 
 function projectHealthHref(healthUrl) {
-const raw = String(healthUrl || "").trim();
-if (!raw) return "";
-
-try {
-const parsed = new URL(raw);
-if (["127.0.0.1", "localhost", "::1"].includes(parsed.hostname)) {
-return parsed.pathname + parsed.search + parsed.hash;
-}
-} catch (_error) {
-}
-
-return raw;
+return String(healthUrl || "").trim();
 }
 
 function renderProjectCatalog() {
@@ -3652,13 +3641,14 @@ const gitMode = summary.git.enabled
 const deployMode = summary.requiresDeployment
 ? (summary.deployCommand ? "ホスト反映あり" : "要反映だが deployCommand 未設定")
 : "反映不要";
+const healthHref = projectHealthHref(summary.healthUrl);
 const note = summary.codexCliOnly
 ? '<div class="project-note"><strong>固定ルール:</strong> 自己改修は Ubuntu の Codex CLI で専用 branch / PR を作成します。Ubuntu main は GitHub main を pull --ff-only し、同一 commit だけを deploy します。このコンソールのブラウザ agent は自己改修に使用しません。</div>'
 : "";
 return [
 '<article class="project-card">',
 '<div class="project-card-head"><h3>', escapeHtml(name), '</h3>',
-projectHealthHref(summary.healthUrl) ? '<a href="' + escapeHtml(projectHealthHref(summary.healthUrl)) + '" target="_blank" rel="noopener">health</a>' : "",
+healthHref ? '<a href="' + escapeHtml(healthHref) + '" data-project-health-url="' + escapeHtml(healthHref) + '" target="_blank" rel="noopener" title="設定済みの稼働確認URLを別タブで開く">稼働確認URLを開く</a>' : "",
 '</div>',
 '<div class="project-facts"><span>Workspace: <strong>', escapeHtml(summary.workspace || "(未設定)"), '</strong></span></div>',
 '<div class="project-facts"><span>配備: <strong>', escapeHtml(deployMode), '</strong></span><span>Git: <strong>', escapeHtml(gitMode), '</strong></span></div>',
@@ -3705,7 +3695,7 @@ return [
 '<div><label for="project-config-service">本番のサービス名 <span class="field-optional">任意</span></label><input id="project-config-service" name="service" maxlength="300" placeholder="pseudo-codex-console.service"><small class="field-help">反映後の再起動や状態確認に使うsystemdサービス名、またはDockerコンテナ名です。</small></div>',
 '<div><label for="project-config-deploy">本番反映コマンド <span class="field-optional">任意</span></label><input id="project-config-deploy" name="deployCommand" maxlength="500" placeholder="/usr/local/libexec/pseudo-codex-deploy-request-console"><small class="field-help">テスト成功後、作業結果を本番へコピー・更新・再起動する既存コマンドです。</small></div>',
 '<div><label for="project-config-verify">反映確認コマンド <span class="field-optional">任意</span></label><input id="project-config-verify" name="verifyCommand" maxlength="500" placeholder="/usr/local/lib/pseudo-codex-console-deploy/verify-live.js"><small class="field-help">本番反映後、配置されたファイルやサービスの状態を確認する既存コマンドです。</small></div>',
-'<div><label for="project-config-health">本番の稼働確認URL <span class="field-optional">任意</span></label><input id="project-config-health" name="healthUrl" maxlength="500" placeholder="http://127.0.0.1:8080/health"><small class="field-help">反映後にアクセスし、Webアプリが正常応答するか確認するURLです。</small></div>',
+'<div><label for="project-config-health">本番の稼働確認URL <span class="field-optional">任意</span></label><input id="project-config-health" name="healthUrl" maxlength="500" placeholder="http://127.0.0.1:8080/health"><small class="field-help">実動作する画面ではなく、正常応答を確認するURLです。127.0.0.1／localhost は、コンソールを開いているUbuntuホスト名に置き換えて別タブで開きます。</small></div>',
 '<div><label for="project-config-owner">反映を実行する担当 <span class="field-optional">通常は変更不要</span></label><input id="project-config-owner" name="deploymentOwner" maxlength="100" placeholder="host_dispatcher"><small class="field-help">通常はhost_dispatcherです。別の実行担当を用意している場合だけ変更します。</small></div>',
 '</div>',
 '<div class="checkbox-row"><label><input type="checkbox" name="requiresDeployment" value="true"> テスト成功後、この設定を使って本番へ自動反映する</label></div>',
@@ -3736,6 +3726,21 @@ const CONSOLE_UI_SCRIPT = String.raw`<script>
   var jobsById = new Map();
   var detailJobsById = new Map();
   var detailRequests = new Map();
+
+  function rewriteProjectHealthLinks() {
+    document.querySelectorAll("a[data-project-health-url]").forEach(function (link) {
+      var raw = link.dataset.projectHealthUrl || "";
+      try {
+        var parsed = new URL(raw, window.location.href);
+        if (["127.0.0.1", "localhost", "::1"].includes(parsed.hostname)) {
+          parsed.hostname = window.location.hostname;
+        }
+        link.href = parsed.href;
+      } catch (_error) {
+        link.href = raw;
+      }
+    });
+  }
 
   function revealCreatedJob() {
     if (!createdJobId) return;
@@ -4117,6 +4122,7 @@ created.textContent = "作成 " + formatCreatedAt(job.createdAt);
     if (!window.matchMedia("(max-width: 780px)").matches) closeMobileDetail();
   });
   requestAnimationFrame(function () {
+    rewriteProjectHealthLinks();
     requestAnimationFrame(revealCreatedJob);
   });
   var client = window.__pseudoCodexClientV2;
