@@ -25,10 +25,7 @@ const WORKER_LOG_LIMIT = Number.parseInt(
 process.env.WORKER_LOG_LIMIT || "12000",
 10
 );
-const MAX_REQUEST_BODY_LENGTH = 36_000_000;
 const MAX_ATTACHMENT_COUNT = 10;
-const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024;
-const MAX_ATTACHMENT_TOTAL_BYTES = 25 * 1024 * 1024;
 const JST_DATE_FORMATTER = new Intl.DateTimeFormat("ja-JP", {
 year: "numeric",
 month: "2-digit",
@@ -1441,16 +1438,6 @@ document.addEventListener('paste', function (event) {
     window.alert('添付できるファイルは10件までです。');
     return;
   }
-  if (nextFiles.some(function (file) { return file.size > 10 * 1024 * 1024; })) {
-    window.alert('1ファイルの上限は10MBです。');
-    return;
-  }
-  if (nextFiles.reduce(function (total, file) {
-    return total + file.size;
-  }, 0) > 25 * 1024 * 1024) {
-    window.alert('添付ファイルの合計上限は25MBです。');
-    return;
-  }
 
   form._pastedFiles = nextFiles;
   renderPastedAttachments(form);
@@ -2596,28 +2583,15 @@ response.end(body);
 function readBody(request) {
 return new Promise(function(resolve, reject) {
 let body = "";
-let rejected = false;
 
 request.setEncoding("utf8");
 
 request.on("data", function(chunk) {
-  if (rejected) {
-    return;
-  }
-
   body += chunk;
-
-  if (body.length > MAX_REQUEST_BODY_LENGTH) {
-    rejected = true;
-    reject(new Error("request body too large"));
-    request.destroy();
-  }
 });
 
 request.on("end", function() {
-  if (!rejected) {
-    resolve(body);
-  }
+  resolve(body);
 });
 
 request.on("error", reject);
@@ -2680,8 +2654,8 @@ throw new Error("invalid attachment data");
 }
 
 const buffer = Buffer.from(data, "base64");
-if (buffer.length === 0 || buffer.length > MAX_ATTACHMENT_BYTES) {
-throw new Error("attachment is empty or too large");
+if (buffer.length === 0) {
+throw new Error("attachment is empty");
 }
 
 return {
@@ -2690,14 +2664,6 @@ type: String(attachment.type || "application/octet-stream").slice(0, 200),
 buffer
 };
 });
-
-const totalAttachmentBytes = attachments.reduce(function(total, attachment) {
-return total + attachment.buffer.length;
-}, 0);
-
-if (totalAttachmentBytes > MAX_ATTACHMENT_TOTAL_BYTES) {
-throw new Error("attachments are too large");
-}
 
 return {
 project: String(value.project || DEFAULT_PROJECT).trim(),
