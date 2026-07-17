@@ -4471,7 +4471,7 @@ function renderPage(jobs, message) {
     '<div class="panel-heading"><div><h2>新規ジョブ</h2><p>タイトルは指示の先頭行から自動生成します。</p></div><button type="button" class="icon-button" data-new-job-close aria-label="閉じる">×</button></div>',
     '<form method="post" action="/jobs" class="new-job-form">',
     '<div class="field"><label for="project">プロジェクト</label><select id="project" name="project" required>', renderProjectOptions(), '</select></div>',
-    '<div class="field" style="grid-column:1/-1"><label for="instruction">詳細な自然言語指示</label><textarea id="instruction" name="instruction" maxlength="20000" required></textarea><small style="display:block;margin-top:6px;color:#64748b;font-size:.65rem">この欄へスクリーンショットやファイルを貼り付けると、そのまま添付できます。</small><ul data-pasted-attachments hidden style="display:grid;gap:6px;margin:8px 0 0;padding:0;list-style:none"></ul></div>',
+    '<div class="field" style="grid-column:1/-1"><label for="instruction">詳細な自然言語指示</label><textarea id="instruction" name="instruction" rows="12" maxlength="20000" aria-describedby="instruction-help" style="min-height:220px;max-height:60dvh;line-height:1.6;resize:vertical" required></textarea><small id="instruction-help" style="display:flex;justify-content:space-between;gap:12px;margin-top:6px;color:#64748b;font-size:.65rem;line-height:1.5"><span>目的、変更内容、対象箇所、完了条件を詳しく入力できます。スクリーンショットやファイルの貼り付けにも対応しています。</span><strong style="flex:0 0 auto;color:#475569">最大20,000文字</strong></small><ul data-pasted-attachments hidden style="display:grid;gap:6px;margin:8px 0 0;padding:0;list-style:none"></ul></div>',
     '<div class="submit-field" style="grid-column:1/-1"><button type="submit" class="primary-button">キューへ登録</button></div>',
     "</form>",
     "</section>",
