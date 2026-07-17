@@ -15,6 +15,9 @@ assert.match(
   /CHATGPT_REQUEST_TIMEOUT_MS \|\| '600000'/,
   "outer request timeout must cover the browser recovery window plus in-call throttle waits"
 );
+assert.match(agentSource, /PSEUDO_CODEX_MESSAGE_LIMIT_WAIT_MS \|\| '1800000'/);
+assert.match(agentSource, /CHATGPT_MESSAGE_LIMIT\/m\.test\(response\)/);
+assert.match(agentSource, /errorClass: 'message_limit_wait'/);
 
 const { parseRunBlocks } = require(agentPath);
 assert.deepEqual(
@@ -64,6 +67,45 @@ if (state.newChats < 2) {
 `, { mode: 0o700 });
 
 try {
+  const limitWorkspace = path.join(root, "limit-workspace");
+  const limitStateFile = path.join(root, "limit-state.json");
+  const limitFakeChatGpt = path.join(root, "fake-message-limit.js");
+  fs.mkdirSync(limitWorkspace, { recursive: true });
+  fs.writeFileSync(limitFakeChatGpt, `
+"use strict";
+const fs = require("node:fs");
+const args = process.argv.slice(2);
+const statePath = process.env.FAKE_LIMIT_STATE_FILE;
+let calls = 0;
+try { calls = JSON.parse(fs.readFileSync(statePath, "utf8")).calls; } catch (_error) {}
+calls += 1;
+fs.writeFileSync(statePath, JSON.stringify({ calls, isNew: args.includes("--new") }));
+if (calls === 1) {
+  process.stderr.write("CHATGPT_MESSAGE_LIMIT: メッセージの上限に到達しました");
+  process.exit(1);
+}
+process.stdout.write("Message-limit retry verified.\\n===TASK_COMPLETE===");
+`, { mode: 0o700 });
+  const limitResult = childProcess.spawnSync(
+    process.execPath,
+    [agentPath, "--auto", "--cwd", limitWorkspace, "message limit wait check"],
+    {
+      encoding: "utf8",
+      timeout: 10000,
+      env: {
+        ...process.env,
+        PSEUDO_CODEX_CHATGPT_SCRIPT: limitFakeChatGpt,
+        PSEUDO_CODEX_MESSAGE_LIMIT_WAIT_MS: "5",
+        FAKE_LIMIT_STATE_FILE: limitStateFile
+      }
+    }
+  );
+  const limitOutput = (limitResult.stdout || "") + (limitResult.stderr || "");
+  assert.equal(limitResult.status, 0, limitOutput);
+  assert.match(limitOutput, /\[message limit\]/);
+  assert.match(limitOutput, /===TASK_COMPLETE===/);
+  assert.equal(JSON.parse(fs.readFileSync(limitStateFile, "utf8")).calls, 2);
+
   const result = childProcess.spawnSync(
     process.execPath,
     [agentPath, "--auto", "--cwd", workspace, "--session-file", sessionFile, "controller recovery check"],

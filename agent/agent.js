@@ -58,6 +58,10 @@ const CHATGPT_REQUEST_TIMEOUT_MS = Number.parseInt(
   process.env.CHATGPT_REQUEST_TIMEOUT_MS || '600000',
   10
 );
+const MESSAGE_LIMIT_WAIT_MS = Number.parseInt(
+  process.env.PSEUDO_CODEX_MESSAGE_LIMIT_WAIT_MS || '1800000',
+  10
+);
 const COMMAND_OUTPUT_LIMIT = Number.parseInt(
   process.env.PSEUDO_CODEX_COMMAND_OUTPUT_LIMIT || '20000',
   10
@@ -1290,7 +1294,23 @@ async function main() {
     await reportProgress(args, 'waiting_chatgpt', 'ChatGPT回答待ち turn=' + turns, statePayload({}));
     const sentPrompt = compactContext(prompt);
     const sentAt = new Date().toISOString();
-    const response = ask(sentPrompt, isNew, args.sessionFile, args.sessionKey);
+    let response;
+    while (true) {
+      response = ask(sentPrompt, isNew, args.sessionFile, args.sessionKey);
+      if (!/^\[ERROR\].*CHATGPT_MESSAGE_LIMIT/m.test(response)) break;
+
+      const waitMinutes = Math.round(MESSAGE_LIMIT_WAIT_MS / 60_000);
+      const waitUntil = new Date(Date.now() + MESSAGE_LIMIT_WAIT_MS).toISOString();
+      const waitMessage = `ChatGPTのメッセージ上限を検出。このジョブのみ${waitMinutes}分待機して同じ送信を再試行`;
+      console.error(`[message limit] ${waitMessage} (until ${waitUntil})`);
+      await reportProgress(
+        args,
+        'waiting_chatgpt',
+        waitMessage,
+        statePayload({ errorClass: 'message_limit_wait', waitUntil })
+      );
+      await new Promise(resolve => setTimeout(resolve, MESSAGE_LIMIT_WAIT_MS));
+    }
     isNew = false;
     const metadata = conversationMetadata(args);
     if (metadata.chatConversationUrl) {
