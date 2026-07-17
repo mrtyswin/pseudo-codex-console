@@ -3876,7 +3876,7 @@ const note = summary.codexCliOnly
 return [
 '<article class="project-card">',
 '<div class="project-card-head"><h3>', escapeHtml(name), '</h3>',
-healthHref ? '<a href="' + escapeHtml(healthHref) + '" data-project-health-url="' + escapeHtml(healthHref) + '" target="_blank" rel="noopener" title="設定済みの稼働確認URLを別タブで開く">稼働確認URLを開く</a>' : "",
+healthHref ? '<a href="/" data-project-health-url="' + escapeHtml(healthHref) + '" target="_blank" rel="noopener" title="設定済みの稼働確認URLを別タブで開く">稼働確認URLを開く</a>' : '<span title="プロジェクト設定の「本番の稼働確認URL」が未設定です">稼働確認URL未設定</span>',
 '</div>',
 '<div class="project-facts"><span>Workspace: <strong>', escapeHtml(summary.workspace || "(未設定)"), '</strong></span></div>',
 '<div class="project-facts"><span>配備: <strong>', escapeHtml(deployMode), '</strong></span><span>Git: <strong>', escapeHtml(gitMode), '</strong></span></div>',
