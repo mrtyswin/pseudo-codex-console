@@ -1391,6 +1391,42 @@ document.addEventListener('scroll', function (event) {
   state.status = '更新停止中';
 }, true);
 
+document.addEventListener('submit', async function (event) {
+  var form = event.target.closest && event.target.closest('form.new-job-form');
+  if (!form) return;
+  event.preventDefault();
+  if (form.dataset.submitting === 'true') return;
+
+  var submitButton = form.querySelector('button[type="submit"]');
+  var originalLabel = submitButton ? submitButton.textContent : '';
+  form.dataset.submitting = 'true';
+  if (submitButton) {
+    submitButton.disabled = true;
+    submitButton.textContent = '登録中...';
+  }
+
+  try {
+    var response = await fetch(form.action || '/jobs', {
+      method: 'POST',
+      headers: {
+        Accept: 'application/json',
+        'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8'
+      },
+      body: new URLSearchParams(new FormData(form)).toString(),
+      credentials: 'same-origin'
+    });
+    if (!response.ok) throw new Error('job creation failed');
+    window.location.assign('/?created=1');
+  } catch (_error) {
+    form.dataset.submitting = 'false';
+    if (submitButton) {
+      submitButton.disabled = false;
+      submitButton.textContent = originalLabel;
+    }
+    window.alert('キューへの登録に失敗しました。');
+  }
+}, true);
+
 document.addEventListener('click', async function (event) {
   var newJobToggle = event.target.closest && event.target.closest('[data-new-job-toggle]');
   if (newJobToggle) {
