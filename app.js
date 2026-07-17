@@ -4028,7 +4028,11 @@ const CONSOLE_UI_SCRIPT = String.raw`<script>
   function captureDetailViews(root) {
     if (!root) return;
     root.querySelectorAll(".detail-job details[data-detail-key]").forEach(function (detailsNode) {
-      rememberDetailView(detailsNode);
+      var content = detailContent(detailsNode);
+      var userScrolled = Boolean(
+        content && content.scrollHeight - content.clientHeight - content.scrollTop > 4
+      );
+      rememberDetailView(detailsNode, userScrolled);
     });
   }
 
@@ -4310,10 +4314,22 @@ created.textContent = "作成 " + formatCreatedAt(job.createdAt);
     var detailsNode = content.closest("#job-detail-panel .detail-job details[data-detail-key]");
     if (!detailsNode || content !== detailContent(detailsNode)) return;
     if (detailsNode.dataset.detailScrollRestoring === "true") return;
-    rememberDetailView(detailsNode, true);
+    rememberDetailView(
+      detailsNode,
+      content.scrollHeight - content.clientHeight - content.scrollTop > 4
+    );
   }, true);
 
   document.addEventListener("click", function (event) {
+    var homeLink = event.target.closest && event.target.closest("[data-home-link]");
+    if (homeLink) {
+      event.preventDefault();
+      closeMobileDetail();
+      history.replaceState(null, "", window.location.pathname + "#overview");
+      window.scrollTo({top: 0, behavior: "smooth"});
+      return;
+    }
+
     // The new-job toggle/close buttons are handled in client.js only. Two
     // independent jobs each bound the same toggle here and there; both
     // handlers flipped the hidden flag on one click and the button looked dead.
@@ -4439,7 +4455,7 @@ function renderPage(jobs, message) {
     "<body>",
     '<div class="app-shell">',
     '<aside class="sidebar">',
-    '<div class="brand"><strong>PSEUDO CODEX</strong><span>Operations Console</span></div>',
+    '<a class="brand" href="#overview" data-home-link aria-label="最初の画面に戻る" style="color:inherit;text-decoration:none"><strong>PSEUDO CODEX</strong><span>Operations Console</span></a>',
     '<nav class="side-nav" aria-label="主要メニュー">',
     '<a href="#overview" aria-current="page"><span class="nav-mark">⌂</span><span class="nav-label">概要</span></a>',
     '<a href="#jobs-section"><span class="nav-mark">▤</span><span class="nav-label">ジョブ</span></a>',
