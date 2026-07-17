@@ -1112,6 +1112,65 @@ function detail(jobId, title, value, resultClass) {
     '</summary><pre>' + escapeHtml(value) + '</pre></details>';
 }
 
+function completionEvidence(job) {
+  var terminal = ['completed', 'failed', 'stopped', 'blocked'].includes(job.stage);
+  var sections = [];
+  var commandEvidence = [];
+
+  (job.conversationTurns || []).forEach(function (turn) {
+    (turn.commandResults || []).forEach(function (result) {
+      var status = result.rejected ? '拒否' : result.timedOut ? 'タイムアウト' :
+        result.exitStatus == null ? '状態不明' : '終了 ' + result.exitStatus;
+      commandEvidence.push('[' + status + '] ' + String(result.command || '') +
+        (result.output ? '\n' + clip(sanitizeUserFacingText(result.output), 5000) : ''));
+    });
+    (turn.checkResults || []).forEach(function (result) {
+      commandEvidence.push('[検証・終了 ' +
+        (result.exitStatus == null ? '?' : result.exitStatus) + '] ' +
+        String(result.command || '') +
+        (result.output ? '\n' + clip(sanitizeUserFacingText(result.output), 5000) : ''));
+    });
+  });
+
+  if (job.lastError) sections.push('【原因・停止理由】\n' + humanErrorText(job.lastError));
+  if (job.finalAnswer) sections.push('【最終回答】\n' + job.finalAnswer);
+  if (job.executionResult) sections.push('【実施・解決内容】\n' + job.executionResult);
+  if (job.verificationResult) sections.push('【確認結果】\n' + job.verificationResult);
+  if (!job.finalAnswer && !job.executionResult && !job.verificationResult && job.result) {
+    sections.push('【最終結果】\n' + job.result);
+  }
+  if ((job.changedFiles || []).length) {
+    sections.push('【変更ファイル】\n' + job.changedFiles.map(function (file) {
+      return '- ' + file;
+    }).join('\n'));
+  }
+  if (commandEvidence.length) {
+    sections.push('【Ubuntuで取得した実行・検証結果】\n' +
+      commandEvidence.slice(-8).join('\n\n'));
+  }
+
+  var text = sections.join('\n\n') ||
+    (terminal
+      ? '最終結果はまだ記録されていません。'
+      : '処理完了後に、原因・解決内容・確認結果をここへ表示します。');
+  var urls = Array.from(new Set(text.match(/https?:\/\/[^\s<>"')\]]+/g) || [])).slice(0, 12);
+  var key = job.id + ':最終状態・実物の確認結果を表示';
+  var isOpen = detailStates.has(key) ? detailStates.get(key) : terminal;
+  var links = urls.length
+    ? '<div class="job-download"><strong>実物・確認用リンク:</strong> ' +
+      urls.map(function (url) {
+        return '<a href="' + escapeHtml(url) +
+          '" target="_blank" rel="noopener noreferrer">' +
+          escapeHtml(url) + '</a>';
+      }).join(' · ') + '</div>'
+    : '';
+
+  return '<details class="result-details completion-evidence" data-detail-key="' +
+    escapeHtml(key) + '"' + (isOpen ? ' open' : '') +
+    '><summary>最終状態・実物の確認結果を表示</summary>' +
+    links + '<pre>' + escapeHtml(text) + '</pre></details>';
+}
+
 function conversationDetail(job) {
   var value = conversationHtml(job.conversationTurns);
   if (!value) return '';
@@ -1233,7 +1292,8 @@ function renderJob(job) {
     '/transcript" download="transcript.json">このジョブのやり取りをダウンロード</a></div>' +
     detail(job.id, '指示を表示', job.instruction, false) +
     conversationDetail(job) +
-    detail(job.id, '最終結果を表示', job.result, true) +
+    completionEvidence(job) +
+    detail(job.id, '最終結果の原文を表示', job.result, true) +
     detail(job.id, 'ワーカーログを表示', job.workerLog, false) +
     detail(job.id, 'ファイル変更の記録を表示', transactionsText(job.transactions), false) +
     detail(job.id, '実装方針を切り替えた履歴を表示', recoveryHistoryText(job.recoveryHistory), false) +
