@@ -44,6 +44,13 @@ with tempfile.TemporaryDirectory() as temporary:
     assert "BROWSER_RESTART_SKIPPED_SHARED_DAEMON" in recovery
     assert "systemctl" not in recovery
 
+    module.api_json = lambda method, path, payload=None: (200, {"jobs": [
+        {"id": "failed-job", "status": "running", "stage": "waiting_chatgpt"},
+        {"id": "other-job", "status": "running", "stage": "waiting_chatgpt"},
+    ]})
+    recovery = module.recover_browser_after_failure("failed-job")
+    assert "other active sessions=other-job" in recovery
+
     lock_path = Path(os.environ["PSEUDO_CODEX_STATE_DIR"]) / "browser-restart.lock"
     lock_path.parent.mkdir(parents=True, exist_ok=True)
     marker_path = Path(temporary) / "claim-reached-api"

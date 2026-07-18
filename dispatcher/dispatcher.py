@@ -881,11 +881,32 @@ def restart_browser() -> str:
         return f"$ {' '.join(command)}\nrestart error: {exc!r}"
 
 
-def recover_browser_after_failure() -> str:
-    if MAX_WORKERS > 1:
+def recover_browser_after_failure(job_id: str = "") -> str:
+    """Restart only when no other job can lose its browser page.
+
+    A shared daemon needs a restart after a dead session, but the old pool-wide
+    guard skipped every restart when two workers were configured.  That left a
+    wedged Chrome process alive and made subsequent jobs time out as well.
+    """
+    if MAX_WORKERS <= 1:
+        return restart_browser()
+    if not job_id:
+        return "BROWSER_RESTART_SKIPPED_SHARED_DAEMON missing failed job identity"
+    status, payload = api_json("GET", "/api/jobs")
+    if status != 200 or not isinstance(payload, dict):
+        return "BROWSER_RESTART_SKIPPED_SHARED_DAEMON cannot verify active sessions"
+    active_stages = {"sending_to_chatgpt", "waiting_chatgpt", "executing_command", "writing_file", "verifying"}
+    other_active = [
+        str(candidate.get("id", ""))
+        for candidate in payload.get("jobs", [])
+        if isinstance(candidate, dict)
+        and str(candidate.get("id", "")) != job_id
+        and (candidate.get("status") == "running" or candidate.get("stage") in active_stages)
+    ]
+    if other_active:
         return (
             "BROWSER_RESTART_SKIPPED_SHARED_DAEMON "
-            "session-local recovery exhausted; preserving other active sessions"
+            "other active sessions=" + ",".join(other_active[:8])
         )
     return restart_browser()
 
@@ -1506,7 +1527,7 @@ def run_job(job: dict[str, Any]) -> None:
         LOG.error("job=%s deployment needs human review: %s", job_id, failure)
         return
 
-    restart_log = recover_browser_after_failure()
+    restart_log = recover_browser_after_failure(job_id)
     detail = compact(output, 6000) + "\n\nBrowser restart:\n" + restart_log
     if quarantine_note:
         detail += "\n\nPrimary workspace cleanup:\n" + quarantine_note

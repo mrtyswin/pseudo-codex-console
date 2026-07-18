@@ -1634,13 +1634,23 @@ document.addEventListener('click', async function (event) {
   if (recoverButton) {
     var recoverContainer = recoverButton.closest('.handoff-actions');
     var recoverStatus = recoverContainer.querySelector('[data-handoff-status]');
+    var followUp = window.prompt('前回の結果を踏まえて、次にしてほしいことを書いてください。', '');
+    if (followUp === null) return;
+    followUp = followUp.trim();
+    if (followUp.length > 20000) {
+      recoverStatus.textContent = '追加指示は20,000文字以内にしてください';
+      return;
+    }
     recoverButton.disabled = true;
-    recoverStatus.textContent = '別の手を依頼中...';
+    recoverStatus.textContent = '継続ジョブを登録中...';
     try {
       var recoverResponse = await fetch('/api/jobs/' + encodeURIComponent(recoverButton.dataset.jobId) + '/recover', {
-        method: 'POST', headers: {'Content-Type': 'application/json'}, body: '{}'
+        method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ instruction: followUp })
       });
-      if (!recoverResponse.ok) throw new Error('recover request failed');
+      if (!recoverResponse.ok) {
+        var recoverError = await recoverResponse.text();
+        throw new Error(recoverError || 'recover request failed');
+      }
       recoverStatus.textContent = '継続ジョブを登録しました';
       await refreshJobs();
     } catch (_error) {
@@ -3313,6 +3323,7 @@ const NON_CONTINUABLE_FAILURE_PATTERN = new RegExp([
 "Dispatcher rejected the project path",
 "Dispatcher preflight failed",
 "GIT_PUBLISH_NOT_CONFIGURED",
+"GIT_REBASE_CONFLICT",
 "AUTO_DEPLOY_CONFIG_ERROR",
 "Automatic production deployment or verification failed",
 "MODEL_USAGE_LIMIT",
@@ -3328,23 +3339,23 @@ const evidence = String(result.lastError || "") + "\n" + String(result.workerLog
 return NON_CONTINUABLE_FAILURE_PATTERN.test(evidence);
 }
 
-function continuationFailureKey(job) {
+function continuationFailureKey(job, automatic, followUpInstruction) {
 const checkpointSource = job.checkpoint || job.updatedAt || job.id;
 return crypto.createHash("sha1").update([
 job.id,
 checkpointSource,
 job.errorClass || job.status || job.stage,
-job.strategyPass || 1
+job.strategyPass || 1,
+automatic ? "automatic" : "manual",
+automatic ? "" : String(followUpInstruction || "")
 ].join("\n")).digest("hex");
 }
 
-function createContinuationJob(jobs, job, reason, automatic) {
+function createContinuationJob(jobs, job, reason, automatic, followUpInstruction) {
 if (
 job.isTest ||
 job.kind === "test" ||
-job.stage === "stopped" ||
-job.status === "cancelled" ||
-job.stage === "completed"
+job.status === "cancelled"
 ) {
 return null;
 }
@@ -3353,13 +3364,13 @@ const depth = Number.isSafeInteger(job.autoHandoffDepth)
 ? job.autoHandoffDepth
 : 0;
 const maximum = getAutoHandoffMax();
-if (depth >= maximum) {
+if (automatic && depth >= maximum) {
 job.autoHandoffStatus = "自動再引き継ぎ上限に到達";
 job.autoHandoffCreatedAt = new Date().toISOString();
 return null;
 }
 
-const key = continuationFailureKey(job);
+const key = continuationFailureKey(job, automatic, followUpInstruction);
 const existing = jobs.find(function(candidate) {
 return candidate.autoHandoffKey === key ||
 candidate.id === job.continuationJobId;
@@ -3375,6 +3386,7 @@ const recoveryInstruction = [
 "このジョブは前の実装方法で行き詰まったため、新しいChatGPT会話で継続します。",
 "成功済みの変更とチェックポイントを保持し、失敗した操作を繰り返さず、別の具体的な実装方法を選んでください。",
 reason ? "継続理由: " + reason : "",
+followUpInstruction ? "依頼者からの追加指示:\n" + followUpInstruction : "",
 "",
 buildChatGptHandoff(job)
 ].filter(Boolean).join("\n");
@@ -3454,18 +3466,19 @@ job.autoHandoffStatus + " continuation=" + continuationId
 return continuation;
 }
 
-function requestAlternativeJob(id) {
+function requestAlternativeJob(id, followUpInstruction) {
 return mutateJobs(function(jobs) {
 const job = jobs.find(function(candidate) {
 return candidate.id === id;
 });
 if (!job) return null;
-if (!["failed", "blocked"].includes(job.stage)) return null;
+if (!["completed", "failed", "stopped", "blocked"].includes(job.stage)) return null;
 return createContinuationJob(
 jobs,
 job,
-job.lastError || "Web GUIから別の実装方法を要求",
-false
+job.lastError || "Web GUIから結果を踏まえた継続を要求",
+false,
+followUpInstruction
 );
 });
 }
@@ -4844,11 +4857,21 @@ return;
 
 const recoverJobId = parseJobPath(url.pathname, "recover");
 if (request.method === "POST" && recoverJobId) {
-const continuation = await requestAlternativeJob(recoverJobId);
+try {
+const values = parseBody(request, await readBody(request));
+const followUpInstruction = String(values.instruction || "").trim();
+if (followUpInstruction.length > 20000) {
+sendJson(response, 413, { error: "instruction is too long" });
+return;
+}
+const continuation = await requestAlternativeJob(recoverJobId, followUpInstruction);
 if (!continuation) {
 sendJson(response, 409, { error: "job cannot create a continuation" });
 } else {
 sendJson(response, 201, continuation);
+}
+} catch (error) {
+sendJson(response, 400, { error: error instanceof Error ? error.message : "invalid request" });
 }
 return;
 }
