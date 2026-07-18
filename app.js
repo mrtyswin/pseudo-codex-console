@@ -2969,7 +2969,7 @@ return String(index + 1).padStart(2, "0") + "-" + (sanitized || "clipboard-file"
 function persistJobAttachments(jobId, attachments) {
 if (attachments.length === 0) return [];
 
-const directory = path.join(RESULT_LOG_ROOT, jobId, "attachments");
+const directory = path.join(path.dirname(DATA_PATH), "attachments", jobId);
 fs.mkdirSync(directory, { recursive: true });
 
 return attachments.map(function(attachment, index) {
