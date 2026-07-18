@@ -466,9 +466,21 @@ def prepare_job_workspace(
     fetch = run_git(source_workspace, ["fetch", "--prune", remote, base_branch], timeout=300)
     if fetch.returncode != 0:
         raise RuntimeError("Cannot fetch Git base branch: " + git_error(fetch))
+    # Cleanup removes a completed job's worktree but intentionally preserves
+    # its branch. A manual follow-up must attach to that branch, not recreate
+    # it and fail with "a branch named ... already exists".
+    branch_exists = run_git(
+        source_workspace,
+        ["show-ref", "--verify", "--quiet", f"refs/heads/{branch}"],
+    )
+    add_args = (
+        ["worktree", "add", str(worktree), branch]
+        if branch_exists.returncode == 0
+        else ["worktree", "add", "-b", branch, str(worktree), f"{remote}/{base_branch}"]
+    )
     add = run_git(
         source_workspace,
-        ["worktree", "add", "-b", branch, str(worktree), f"{remote}/{base_branch}"],
+        add_args,
         timeout=300,
     )
     if add.returncode != 0:
