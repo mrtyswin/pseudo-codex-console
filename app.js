@@ -1163,14 +1163,25 @@ function completionEvidence(job) {
   var urls = Array.from(new Set(text.match(/https?:\/\/[^\s<>"')\]]+/g) || [])).slice(0, 12);
   var key = job.id + ':最終状態・実物の確認結果を表示';
   var isOpen = detailStates.has(key) ? detailStates.get(key) : terminal;
-  var links = urls.length
-    ? '<div class="job-download"><strong>実物・確認用リンク:</strong> ' +
-      urls.map(function (url) {
-        return '<a href="' + escapeHtml(url) +
-          '" target="_blank" rel="noopener noreferrer">' +
-          escapeHtml(url) + '</a>';
-      }).join(' · ') + '</div>'
-    : '';
+  var links = '<div class="job-download"><strong>実物・確認用リンク:</strong> ' +
+    (urls.length
+      ? urls.map(function (url) {
+          var href = url;
+          try {
+            var parsed = new URL(url, window.location.href);
+            if (['127.0.0.1', 'localhost', '::1'].includes(parsed.hostname)) {
+              parsed.hostname = window.location.hostname;
+            }
+            href = parsed.href;
+          } catch (_error) {
+            href = url;
+          }
+          return '<a href="' + escapeHtml(href) +
+            '" target="_blank" rel="noopener noreferrer">' +
+            escapeHtml(href) + '</a>';
+        }).join(' · ')
+      : '<span>未検出（最終結果または検証結果にURLが記録された場合に表示）</span>') +
+    '</div>';
 
   return '<details class="result-details completion-evidence" data-detail-key="' +
     escapeHtml(key) + '"' + (isOpen ? ' open' : '') +
