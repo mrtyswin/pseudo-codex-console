@@ -3712,8 +3712,8 @@ action === "stop" ? "停止" : "再実行",
 }
 
 function renderHandoffActions(job) {
-const recoveryButton = ["failed", "blocked"].includes(job.stage)
-? '<button type="button" data-recover-job data-job-id="' + escapeHtml(job.id) + '">別の手をChatGPTに聞く</button>'
+const recoveryButton = ["completed", "failed", "stopped", "blocked"].includes(job.stage)
+? '<button type="button" data-recover-job data-job-id="' + escapeHtml(job.id) + '">この結果の続きで指示</button>'
 : "";
 return [
 '<div class="handoff-actions">',
