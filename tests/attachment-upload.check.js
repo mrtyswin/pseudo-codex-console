@@ -61,9 +61,12 @@ response.on("data", function(chunk) {
 chunks.push(chunk);
 });
 response.on("end", function() {
+const buffer = Buffer.concat(chunks);
 resolve({
 statusCode: response.statusCode,
-body: Buffer.concat(chunks).toString("utf8")
+headers: response.headers,
+buffer,
+body: buffer.toString("utf8")
 });
 });
 });
@@ -153,7 +156,60 @@ job.instruction.includes(attachmentPath),
 "job instruction must include the stored attachment path"
 );
 
-console.log("ATTACHMENT_UPLOAD_OK");
+const generatedImage = Buffer.from([
+0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
+0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52
+]);
+const generatedImagePath = path.join(
+temporaryRoot,
+"generated-preview.png"
+);
+fs.writeFileSync(generatedImagePath, generatedImage);
+
+const resultResponse = await request(
+"POST",
+"/api/jobs/" + encodeURIComponent(job.id) + "/result",
+JSON.stringify({
+status: "done",
+finalAnswer: "加工画像を生成しました。",
+artifactPaths: [generatedImagePath]
+})
+);
+
+assert.equal(resultResponse.statusCode, 200, resultResponse.body);
+
+const completedJobResponse = await request(
+"GET",
+"/api/jobs/" + encodeURIComponent(job.id)
+);
+assert.equal(
+completedJobResponse.statusCode,
+200,
+completedJobResponse.body
+);
+
+const completedJob = JSON.parse(completedJobResponse.body);
+assert.equal(completedJob.resultArtifacts.length, 1);
+assert.deepEqual(completedJob.resultArtifacts[0], {
+name: "generated-preview.png",
+fileName: "01-generated-preview.png",
+type: "image/png",
+size: generatedImage.length
+});
+
+const artifactResponse = await request(
+"GET",
+"/api/jobs/" + encodeURIComponent(job.id) + "/artifacts/0"
+);
+assert.equal(artifactResponse.statusCode, 200, artifactResponse.body);
+assert.equal(artifactResponse.headers["content-type"], "image/png");
+assert.match(
+artifactResponse.headers["content-disposition"],
+/^inline; filename="generated-preview.png"$/
+);
+assert.deepEqual(artifactResponse.buffer, generatedImage);
+
+console.log("ATTACHMENT_UPLOAD_AND_RESULT_ARTIFACT_OK");
 }
 
 main()

@@ -1316,6 +1316,7 @@ function renderJob(job) {
     runtime + recoveryInfo(job) + jobActions(job) + handoffActions(job) +
     '<div class="job-download"><a href="/api/jobs/' + encodeURIComponent(job.id) +
     '/transcript" download="transcript.json">このジョブのやり取りをダウンロード</a></div>' +
+    resultArtifacts(job) +
     detail(job.id, '指示を表示', job.instruction, false) +
     conversationDetail(job) +
     completionEvidence(job) +
@@ -1325,6 +1326,28 @@ function renderJob(job) {
     detail(job.id, '実装方針を切り替えた履歴を表示', recoveryHistoryText(job.recoveryHistory), false) +
     detail(job.id, '再開時に使う作業メモを表示', job.checkpoint || '作業メモはまだありません。', false) +
     detail(job.id, '停止・失敗の理由を表示', humanErrorText(job.lastError), false) + historyDetail(job) + '</article>';
+}
+
+function resultArtifacts(job) {
+  var artifacts = Array.isArray(job.resultArtifacts) ? job.resultArtifacts : [];
+  if (!artifacts.length) return '';
+
+  return '<section class="result-artifacts" style="display:grid;gap:10px;margin:12px 0;padding:12px;border:1px solid #cbd5e1;border-radius:10px">' +
+    '<strong>生成ファイル</strong>' +
+    artifacts.map(function (artifact, index) {
+      var href = '/api/jobs/' + encodeURIComponent(job.id) + '/artifacts/' + index;
+      var preview = String(artifact.type || '').indexOf('image/') === 0
+        ? '<a href="' + href + '" target="_blank" rel="noopener"><img src="' + href +
+          '" alt="' + escapeHtml(artifact.name) +
+          '" style="display:block;max-width:100%;max-height:420px;object-fit:contain;border-radius:8px"></a>'
+        : '';
+
+      return '<div style="display:grid;gap:6px">' + preview +
+        '<a href="' + href + '" download="' + escapeHtml(artifact.name) + '">' +
+        escapeHtml(artifact.name) + '（' + escapeHtml(artifact.size) +
+        ' bytes）</a></div>';
+    }).join('') +
+    '</section>';
 }
 
 function renderJobListCard(job) {
@@ -2095,6 +2118,26 @@ source.finalAnswer || (!hasStructuredResult ? source.result : ""),
 );
 const executionResult = compactText(source.executionResult, 50000);
 const verificationResult = compactText(source.verificationResult, 50000);
+const resultArtifacts = Array.isArray(source.resultArtifacts)
+? source.resultArtifacts
+.filter(function(artifact) {
+return artifact && typeof artifact === "object";
+})
+.map(function(artifact) {
+return {
+name: path.basename(normalizeString(artifact.name)),
+fileName: path.basename(normalizeString(artifact.fileName)),
+type: normalizeString(artifact.type) || "application/octet-stream",
+size: Number.isSafeInteger(artifact.size) && artifact.size >= 0
+? artifact.size
+: 0
+};
+})
+.filter(function(artifact) {
+return artifact.name && artifact.fileName;
+})
+.slice(0, 20)
+: [];
 const storedResult = composeResult({
 result: "",
 finalAnswer,
@@ -2127,6 +2170,7 @@ result,
 finalAnswer,
 executionResult,
 verificationResult,
+resultArtifacts,
 workerId: normalizeString(source.workerId),
 sessionId: normalizeString(source.sessionId),
 pid: Number.isSafeInteger(source.pid) && source.pid > 0 ? source.pid : null,
@@ -2371,6 +2415,71 @@ headers["Content-Disposition"] = 'inline; filename="' + filename + '"';
 }
 response.writeHead(statusCode, headers);
 response.end(value);
+}
+
+function resultArtifactContentType(fileName) {
+const extension = path.extname(fileName).toLowerCase();
+return {
+".png": "image/png",
+".jpg": "image/jpeg",
+".jpeg": "image/jpeg",
+".gif": "image/gif",
+".webp": "image/webp",
+".svg": "image/svg+xml",
+".pdf": "application/pdf",
+".zip": "application/zip",
+".txt": "text/plain; charset=utf-8",
+".md": "text/markdown; charset=utf-8",
+".json": "application/json; charset=utf-8",
+".csv": "text/csv; charset=utf-8"
+}[extension] || "application/octet-stream";
+}
+
+function persistResultArtifacts(jobId, artifactPaths) {
+if (!Array.isArray(artifactPaths) || artifactPaths.length === 0) return [];
+
+const directory = path.join(path.dirname(DATA_PATH), "result-artifacts", jobId);
+fs.rmSync(directory, { recursive: true, force: true });
+fs.mkdirSync(directory, { recursive: true });
+
+return artifactPaths.slice(0, 20).flatMap(function(value, index) {
+try {
+const sourcePath = path.resolve(String(value || ""));
+const stat = fs.statSync(sourcePath);
+if (!stat.isFile() || stat.size > 50 * 1024 * 1024) return [];
+
+const name = path.basename(sourcePath);
+const fileName = sanitizeAttachmentName(name, index);
+fs.copyFileSync(sourcePath, path.join(directory, fileName));
+return [{
+name,
+fileName,
+type: resultArtifactContentType(name),
+size: stat.size
+}];
+} catch (_error) {
+return [];
+}
+});
+}
+
+function sendResultArtifact(response, artifact, filePath) {
+const stat = fs.statSync(filePath);
+if (!stat.isFile()) throw new Error("artifact not found");
+
+const disposition = String(artifact.type || "").startsWith("image/")
+? "inline"
+: "attachment";
+const safeName = path.basename(String(artifact.name || "artifact"))
+.replace(/["\r\n]/g, "_");
+
+response.writeHead(200, {
+"Content-Type": artifact.type || "application/octet-stream",
+"Content-Length": stat.size,
+"Content-Disposition": disposition + '; filename="' + safeName + '"',
+"Cache-Control": "no-store"
+});
+fs.createReadStream(filePath).pipe(response);
 }
 
 function readProjectConfigs() {
@@ -2958,6 +3067,9 @@ result: String(value.result || ""),
 finalAnswer: String(value.finalAnswer || ""),
 executionResult: String(value.executionResult || ""),
 verificationResult: String(value.verificationResult || ""),
+artifactPaths: Array.isArray(value.artifactPaths)
+? value.artifactPaths.map(String).slice(0, 20)
+: [],
 workerId: String(value.workerId || "").trim().slice(0, 200),
 sessionId: String(value.sessionId || "").trim().slice(0, 200),
 pid: boundedInteger(value.pid, 1, 2147483647, null),
@@ -3528,6 +3640,9 @@ job.workerLog = compactText(result.workerLog, WORKER_LOG_LIMIT);
 job.finalAnswer = compactText(result.finalAnswer, 50000);
 job.executionResult = compactText(result.executionResult, 50000);
 job.verificationResult = compactText(result.verificationResult, 50000);
+if (result.artifactPaths.length > 0) {
+job.resultArtifacts = persistResultArtifacts(job.id, result.artifactPaths);
+}
 const deferred = result.status === "deferred";
 if (deferred) {
 job.retryAt = normalizeOptionalDate(result.retryAt);
@@ -3915,6 +4030,7 @@ renderRecoveryInfo(job),
 renderJobActions(job),
 renderHandoffActions(job),
 ['<div class="job-download"><a href="/api/jobs/', encodeURIComponent(job.id), '/transcript" download="transcript.json">このジョブのやり取りをダウンロード</a></div>'].join(""),
+renderResultArtifacts(job),
 renderDetails(job.id, "指示を表示", job.instruction, false, false),
 renderConversationDetails(job),
 renderDetails(job.id, "最終結果を表示", job.result, false, true),
@@ -3925,6 +4041,39 @@ renderDetails(job.id, "再開時に使う作業メモを表示", job.checkpoint 
 renderDetails(job.id, "停止・失敗の理由を表示", renderHumanErrorText(job.lastError), job.stage === "failed", false),
 renderHistoryDetails(job.id, job.history, false),
 "</article>"
+].join("");
+}
+
+function renderResultArtifacts(job) {
+const artifacts = Array.isArray(job.resultArtifacts)
+? job.resultArtifacts
+: [];
+if (artifacts.length === 0) return "";
+
+return [
+'<section class="result-artifacts" style="display:grid;gap:10px;margin:12px 0;padding:12px;border:1px solid #cbd5e1;border-radius:10px">',
+"<strong>生成ファイル</strong>",
+artifacts.map(function(artifact, index) {
+const href =
+"/api/jobs/" +
+encodeURIComponent(job.id) +
+"/artifacts/" +
+index;
+const preview = String(artifact.type || "").startsWith("image/")
+? '<a href="' + href + '" target="_blank" rel="noopener"><img src="' + href + '" alt="' + escapeHtml(artifact.name) + '" style="display:block;max-width:100%;max-height:420px;object-fit:contain;border-radius:8px"></a>'
+: "";
+
+return [
+'<div style="display:grid;gap:6px">',
+preview,
+'<a href="', href, '" download="', escapeHtml(artifact.name), '">',
+escapeHtml(artifact.name),
+"（",
+escapeHtml(artifact.size),
+" bytes）</a></div>"
+].join("");
+}).join(""),
+"</section>"
 ].join("");
 }
 
@@ -4682,6 +4831,27 @@ return decodeURIComponent(parts[3]);
 return "";
 }
 
+function parseJobArtifactPath(pathname) {
+const parts = pathname.split("/");
+
+if (
+parts.length === 6 &&
+parts[0] === "" &&
+parts[1] === "api" &&
+parts[2] === "jobs" &&
+parts[3] &&
+parts[4] === "artifacts" &&
+/^\d+$/.test(parts[5])
+) {
+return {
+jobId: decodeURIComponent(parts[3]),
+index: Number.parseInt(parts[5], 10)
+};
+}
+
+return null;
+}
+
 async function handleRequest(request, response) {
 const url = new URL(
 request.url || "/",
@@ -4811,6 +4981,40 @@ response,
 buildChatGptHandoff(job),
 "pseudo-codex-handoff-" + job.id + ".md"
 );
+return;
+}
+
+const artifactRequest = parseJobArtifactPath(url.pathname);
+if (request.method === "GET" && artifactRequest) {
+const job = readJobs().find(function(candidate) {
+return candidate.id === artifactRequest.jobId;
+});
+const artifact =
+job &&
+Array.isArray(job.resultArtifacts) &&
+job.resultArtifacts[artifactRequest.index];
+
+if (!job || !artifact) {
+sendJson(response, 404, {
+error: "artifact not found"
+});
+return;
+}
+
+const artifactPath = path.join(
+path.dirname(DATA_PATH),
+"result-artifacts",
+job.id,
+artifact.fileName
+);
+
+try {
+sendResultArtifact(response, artifact, artifactPath);
+} catch (_error) {
+sendJson(response, 404, {
+error: "artifact not found"
+});
+}
 return;
 }
 
