@@ -338,6 +338,29 @@ function cleanFinalAnswer(response) {
   return answer;
 }
 
+const RESULT_ARTIFACT_EXTENSIONS = new Set([
+  '.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg',
+  '.pdf', '.zip', '.txt', '.md', '.json', '.csv',
+]);
+
+function resultArtifactPaths(changedFiles) {
+  const workspace = process.cwd();
+  return [...changedFiles].flatMap(value => {
+    const filePath = path.resolve(workspace, String(value || ''));
+    const relative = path.relative(workspace, filePath);
+    if (!relative || relative.startsWith('..' + path.sep) || path.isAbsolute(relative)) return [];
+    if (!RESULT_ARTIFACT_EXTENSIONS.has(path.extname(filePath).toLowerCase())) return [];
+
+    try {
+      const stat = fs.statSync(filePath);
+      if (!stat.isFile() || stat.size > 50 * 1024 * 1024) return [];
+      return [filePath];
+    } catch (_error) {
+      return [];
+    }
+  }).slice(0, 20);
+}
+
 function isVerificationCommand(command) {
   return /(^|[;&|]\s*)(test\b|node\s+--check\b|npm\s+test\b|pytest\b|python\d*\s+-m\s+pytest\b|curl\b.*\/health\b|grep\b|git\s+diff\s+--check\b)/i.test(
     String(command)
@@ -1727,10 +1750,14 @@ async function main() {
       }
       phase = 'VERIFY';
       await reportProgress(args, 'verifying', '機械的完了条件を確認', statePayload({}));
-      if (finalAnswer) {
+      const artifactPaths = resultArtifactPaths(changedFiles);
+      if (finalAnswer || artifactPaths.length > 0) {
         // Question-style jobs used to bury their answer in the conversation
         // log; hand it to the dispatcher so the job result shows it directly.
-        console.log(FINAL_MARKER + JSON.stringify({ finalAnswer: finalAnswer.slice(0, 20000) }));
+        console.log(FINAL_MARKER + JSON.stringify({
+          finalAnswer: finalAnswer.slice(0, 20000),
+          artifactPaths,
+        }));
       }
       console.log(`\n${COMPLETE_MARKER}`);
       return;

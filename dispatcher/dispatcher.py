@@ -1078,6 +1078,7 @@ def update_result(
     retry_at: str = "",
     message_limit_waits: int | None = None,
     infra_failure: bool = False,
+    artifact_paths: list[str] | None = None,
 ) -> None:
     path = "/api/jobs/" + parse.quote(job_id, safe="") + "/result"
     current = get_job(job_id) or {}
@@ -1099,6 +1100,7 @@ def update_result(
                 if verification_result is None
                 else compact(verification_result, 20_000)
             ),
+            "artifactPaths": artifact_paths or [],
             "workerId": WORKER_ID,
             "sessionId": session_id,
             "pid": pid,
@@ -1661,6 +1663,12 @@ def run_job(job: dict[str, Any]) -> None:
                 session_id=session_id,
                 pid=process.pid,
                 final_answer=(final_hint or {}).get("finalAnswer"),
+                artifact_paths=(
+                    final_hint.get("artifactPaths", [])
+                    if isinstance(final_hint, dict)
+                    and isinstance(final_hint.get("artifactPaths"), list)
+                    else []
+                ),
             )
             cleanup_git_worktree(git_context)
             note_browser_responsive()
