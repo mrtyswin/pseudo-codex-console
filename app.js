@@ -1086,7 +1086,9 @@ function humanErrorText(value) {
   var raw = String(value || '').trim();
   if (!raw) return '停止・失敗は記録されていません。';
   var explanation = '処理中に問題が発生しました。下の技術情報を確認してください。';
-  if (raw.includes('UBUNTU_WORKSPACE_DIRTY')) explanation = 'Ubuntuの正規ワークスペースに未完了の変更が残っているため、安全のため開始できませんでした。';
+  if (raw.includes('BROWSER_INFRA_RETRY_LIMIT')) explanation = 'ChatGPTブラウザ側の障害（無応答・接続エラー）が続き、自動再試行の上限に達しました。ジョブ自体の問題ではありません。ブラウザ復旧後に「再実行」してください。';
+  else if (raw.includes('GIT_REBASE_CONFLICT')) explanation = '他のジョブの変更と衝突し、自動マージできませんでした。「再実行」すると最新の状態からやり直します。';
+  else if (raw.includes('UBUNTU_WORKSPACE_DIRTY')) explanation = 'Ubuntuの正規ワークスペースに未完了の変更が残っているため、安全のため開始できませんでした。';
   else if (raw.includes('CHATGPT_THROTTLED')) explanation = 'ChatGPTのリクエスト制限（Too many requests）が待機リトライ後も解除されなかったため停止しました。数分後に再実行してください。';
   else if (raw.includes('MODEL_USAGE_LIMIT')) explanation = 'ChatGPTの利用上限に達したため、自動実行を停止しました。';
   else if (raw.includes('Waiting failed') || raw.includes('unresponsive')) explanation = 'ChatGPTの応答を時間内に受け取れなかったため停止しました。';
@@ -2124,6 +2126,9 @@ retryAt: normalizeOptionalDate(source.retryAt),
 messageLimitWaits: Number.isSafeInteger(source.messageLimitWaits) && source.messageLimitWaits >= 0
 ? source.messageLimitWaits
 : 0,
+infraRetries: Number.isSafeInteger(source.infraRetries) && source.infraRetries >= 0
+? source.infraRetries
+: 0,
 currentTurn: Number.isSafeInteger(source.currentTurn) && source.currentTurn >= 0
 ? source.currentTurn
 : 0,
@@ -2946,7 +2951,8 @@ sessionId: String(value.sessionId || "").trim().slice(0, 200),
 pid: boundedInteger(value.pid, 1, 2147483647, null),
 preflight: value.preflight === true,
 retryAt: String(value.retryAt || ""),
-messageLimitWaits: boundedInteger(value.messageLimitWaits, 0, 1000, null)
+messageLimitWaits: boundedInteger(value.messageLimitWaits, 0, 1000, null),
+infraFailure: value.infraFailure === true
 };
 }
 
@@ -3296,6 +3302,10 @@ job.leaseExpiresAt = "";
 job.executionStartedAt = "";
 job.retryAt = "";
 job.messageLimitWaits = 0;
+// A manual rerun is a fresh start. Keeping the exhausted counters meant one
+// more failure sent the job straight back to 失敗, which read as "再実行が効かない".
+job.attempts = 0;
+job.infraRetries = 0;
 job.currentCommand = "";
 applyStage(job, "queued", "手動で再実行待ちへ移動");
 return job;
@@ -3519,6 +3529,15 @@ job.attempts = Math.max(0, job.attempts - 1);
 job.retryAt = "";
 }
 
+if (result.status === "queued" && result.infraFailure === true) {
+// Browser/host plumbing failed before ChatGPT could really work. Same rule
+// as deferred: the strategy attempt is refunded, but a separate counter
+// keeps a permanently broken browser from requeueing forever.
+job.attempts = Math.max(0, job.attempts - 1);
+job.infraRetries =
+(Number.isSafeInteger(job.infraRetries) ? job.infraRetries : 0) + 1;
+}
+
 const composed = composeResult(result);
 const logResult = readAllowedResultLog(result.workerLog);
 job.result = composed || logResult || result.workerLog;
@@ -3528,6 +3547,7 @@ if (
   result.status === "completed"
 ) {
   job.phase = "COMPLETE";
+  job.infraRetries = 0;
   applyStage(job, "completed", "処理結果を保存");
 } else if (
   result.status === "needs_human" ||

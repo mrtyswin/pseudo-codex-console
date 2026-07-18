@@ -30,6 +30,10 @@ AGENT = os.environ.get("PSEUDO_CODEX_AGENT", "/usr/local/bin/chatgpt-browser-age
 STATE_DIR = Path(os.environ.get("PSEUDO_CODEX_STATE_DIR", str(HOME / ".local/state/pseudo-codex")))
 POLL_SECONDS = int(os.environ.get("PSEUDO_CODEX_POLL_SECONDS", "5"))
 MAX_ATTEMPTS = int(os.environ.get("JOB_MAX_ATTEMPTS", os.environ.get("PSEUDO_CODEX_MAX_ATTEMPTS", "3")))
+# Browser/infrastructure failures do not consume MAX_ATTEMPTS (the job never
+# reached ChatGPT with a real strategy), but they still need their own ceiling
+# so a permanently broken browser cannot requeue a job forever.
+INFRA_MAX_RETRIES = max(1, int(os.environ.get("PSEUDO_CODEX_INFRA_MAX_RETRIES", "10")))
 TOTAL_TIMEOUT_SECONDS = int(
     os.environ.get("JOB_TOTAL_TIMEOUT_SECONDS", os.environ.get("PSEUDO_CODEX_JOB_TIMEOUT_SECONDS", "14400"))
 )
@@ -61,6 +65,24 @@ MAX_WORKERS = max(1, int(os.environ.get("PSEUDO_CODEX_MAX_WORKERS", "2")))
 GITHUB_FIRST_PROJECTS = {"request-console"}
 BROWSER_RESTART_LOCK = Path(
     os.environ.get("PSEUDO_CODEX_BROWSER_RESTART_LOCK", str(STATE_DIR / "browser-restart.lock"))
+)
+# Watchdog: when this many infra failures happen in a row across all workers,
+# the shared browser is restarted even if other sessions look active — on
+# 2026-07-17 two wedged workers each saw the other as "active" and the restart
+# was skipped all night while every job timed out.
+FORCED_RESTART_AFTER_FAILURES = max(1, int(os.environ.get("PSEUDO_CODEX_FORCED_RESTART_AFTER_FAILURES", "2")))
+FORCED_RESTART_COOLDOWN_SECONDS = int(os.environ.get("PSEUDO_CODEX_FORCED_RESTART_COOLDOWN_SECONDS", "180"))
+INFRA_FAILURE_MARKERS = (
+    "ETIMEDOUT",
+    "spawnSync",
+    "Protocol error (",
+    "Session closed",
+    "Target closed",
+    "CHATGPT_SEND_BUTTON_UNAVAILABLE",
+    "CHATGPT_PROMPT_INPUT_FAILED",
+    "browser remained unresponsive",
+    "ECONNREFUSED",
+    "ECONNRESET",
 )
 
 
@@ -294,6 +316,32 @@ def validate_primary_workspace(
     if branch.returncode != 0 or branch.stdout.strip() != base_branch:
         return False, "UBUNTU_WORKSPACE_NOT_ON_MAIN"
     return True, "UBUNTU_WORKSPACE_RESUME_DIRTY" if dirty else "UBUNTU_WORKSPACE_READY"
+
+
+def ensure_primary_workspace_clean(
+    workspace: Path,
+    base_branch: str,
+    job_id: str,
+) -> tuple[bool, str]:
+    """Validate the primary workspace, auto-stashing stray edits once.
+
+    Jobs run in isolated worktrees, so anything dirtying the primary checkout
+    is leftover junk (a crashed sync, a manual experiment). It used to fail the
+    whole deployment as UBUNTU_WORKSPACE_DIRTY; now the stray state is kept
+    recoverable in a named git stash and publication continues.
+    """
+    ready, detail = validate_primary_workspace(workspace, base_branch)
+    if ready or detail != "UBUNTU_WORKSPACE_DIRTY":
+        return ready, detail
+    stash = run_git(
+        workspace,
+        ["stash", "push", "--include-untracked", "-m", f"pseudo-codex-auto-stash job={job_id}"],
+    )
+    if stash.returncode != 0:
+        return False, "UBUNTU_WORKSPACE_DIRTY\nPRIMARY_STASH_FAILED: " + git_error(stash)
+    ready, detail = validate_primary_workspace(workspace, base_branch)
+    note = "PRIMARY_STASH_OK job=" + job_id + " (git stash list で回収可能)"
+    return ready, detail + "\n" + note
 
 
 def run_publish_verification(
@@ -558,7 +606,9 @@ def publish_git_changes(
     if not verify_ok:
         return False, verify_output
 
-    ready, ready_output = validate_primary_workspace(source, base_branch)
+    ready, ready_output = ensure_primary_workspace_clean(
+        source, base_branch, str(job.get("id", ""))
+    )
     if not ready:
         return False, ready_output
 
@@ -580,6 +630,7 @@ def publish_git_changes(
             f"push結果: {push_result}",
             "main反映結果: fast-forward",
             "Ubuntu同期結果: ok",
+            ready_output,
             verify_output,
             sync_output,
         ]
@@ -638,7 +689,9 @@ def publish_github_direct_changes(
 
     source = Path(context["source"])
     remote = str(context["remote"])
-    ready, ready_output = validate_primary_workspace(source, base_branch)
+    ready, ready_output = ensure_primary_workspace_clean(
+        source, base_branch, str(job.get("id", ""))
+    )
     if not ready:
         return False, ready_output
 
@@ -884,6 +937,37 @@ def task_for(
     return "\n".join(lines)
 
 
+def is_infra_failure(failure: str) -> bool:
+    """Failures caused by the browser/host plumbing, not by the job's strategy."""
+    return any(marker in failure for marker in INFRA_FAILURE_MARKERS)
+
+
+_WATCHDOG_LOCK = threading.Lock()
+_CONSECUTIVE_INFRA_FAILURES = 0
+_LAST_FORCED_RESTART = 0.0
+
+
+def note_infra_failure() -> bool:
+    """Record one infra failure; return True when a forced restart is due."""
+    global _CONSECUTIVE_INFRA_FAILURES, _LAST_FORCED_RESTART
+    with _WATCHDOG_LOCK:
+        _CONSECUTIVE_INFRA_FAILURES += 1
+        if _CONSECUTIVE_INFRA_FAILURES < FORCED_RESTART_AFTER_FAILURES:
+            return False
+        now = time.time()
+        if now - _LAST_FORCED_RESTART < FORCED_RESTART_COOLDOWN_SECONDS:
+            return False
+        _LAST_FORCED_RESTART = now
+        _CONSECUTIVE_INFRA_FAILURES = 0
+        return True
+
+
+def note_browser_responsive() -> None:
+    global _CONSECUTIVE_INFRA_FAILURES
+    with _WATCHDOG_LOCK:
+        _CONSECUTIVE_INFRA_FAILURES = 0
+
+
 def restart_browser() -> str:
     command = ["systemctl", "--user", "restart", BROWSER_SERVICE]
     try:
@@ -893,13 +977,21 @@ def restart_browser() -> str:
         return f"$ {' '.join(command)}\nrestart error: {exc!r}"
 
 
-def recover_browser_after_failure(job_id: str = "") -> str:
+def recover_browser_after_failure(job_id: str = "", force: bool = False) -> str:
     """Restart only when no other job can lose its browser page.
 
     A shared daemon needs a restart after a dead session, but the old pool-wide
     guard skipped every restart when two workers were configured.  That left a
     wedged Chrome process alive and made subsequent jobs time out as well.
+
+    Two extra rules keep that from wedging the whole pool again:
+    - a job whose worker lease has already expired is not "active" — on
+      2026-07-17 two dead jobs blocked each other's restart all night;
+    - ``force`` (consecutive infra failures watchdog) restarts unconditionally,
+      because at that point every "active" session is failing anyway.
     """
+    if force:
+        return "BROWSER_RESTART_FORCED consecutive infra failures\n" + restart_browser()
     if MAX_WORKERS <= 1:
         return restart_browser()
     if not job_id:
@@ -908,12 +1000,14 @@ def recover_browser_after_failure(job_id: str = "") -> str:
     if status != 200 or not isinstance(payload, dict):
         return "BROWSER_RESTART_SKIPPED_SHARED_DAEMON cannot verify active sessions"
     active_stages = {"sending_to_chatgpt", "waiting_chatgpt", "executing_command", "writing_file", "verifying"}
+    now = time.time()
     other_active = [
         str(candidate.get("id", ""))
         for candidate in payload.get("jobs", [])
         if isinstance(candidate, dict)
         and str(candidate.get("id", "")) != job_id
         and (candidate.get("status") == "running" or candidate.get("stage") in active_stages)
+        and parse_timestamp(candidate.get("leaseExpiresAt"), 0.0) > now
     ]
     if other_active:
         return (
@@ -941,6 +1035,7 @@ def update_result(
     final_answer: str | None = None,
     retry_at: str = "",
     message_limit_waits: int | None = None,
+    infra_failure: bool = False,
 ) -> None:
     path = "/api/jobs/" + parse.quote(job_id, safe="") + "/result"
     current = get_job(job_id) or {}
@@ -968,6 +1063,7 @@ def update_result(
             "preflight": preflight,
             "retryAt": retry_at,
             "messageLimitWaits": message_limit_waits,
+            "infraFailure": infra_failure,
         },
     )
 
@@ -1405,6 +1501,7 @@ def run_job(job: dict[str, Any]) -> None:
             retry_at=retry_at,
             message_limit_waits=wait_count,
         )
+        note_browser_responsive()
         LOG.info(
             "job=%s deferred until=%s message_limit_waits=%s",
             job_id,
@@ -1524,6 +1621,7 @@ def run_job(job: dict[str, Any]) -> None:
                 final_answer=(final_hint or {}).get("finalAnswer"),
             )
             cleanup_git_worktree(git_context)
+            note_browser_responsive()
             LOG.info("completed and deployed job=%s", job_id)
             return
 
@@ -1539,11 +1637,43 @@ def run_job(job: dict[str, Any]) -> None:
         LOG.error("job=%s deployment needs human review: %s", job_id, failure)
         return
 
-    restart_log = recover_browser_after_failure(job_id)
+    infra_failure = is_infra_failure(failure)
+    if infra_failure:
+        force_restart = note_infra_failure()
+        restart_log = recover_browser_after_failure(job_id, force=force_restart)
+    else:
+        # The browser answered; the strategy failed. Reset the wedge counter so
+        # a later real hang still needs consecutive evidence.
+        note_browser_responsive()
+        restart_log = recover_browser_after_failure(job_id)
     detail = compact(output, 6000) + "\n\nBrowser restart:\n" + restart_log
     if quarantine_note:
         detail += "\n\nPrimary workspace cleanup:\n" + quarantine_note
-    if attempts >= MAX_ATTEMPTS:
+    infra_retries = max(0, int(job.get("infraRetries", 0) or 0))
+    if infra_failure and infra_retries + 1 < INFRA_MAX_RETRIES:
+        # Browser plumbing failed before the job could really run. Requeue
+        # without consuming one of the strategy attempts (the console
+        # decrements attempts when infraFailure is set, like deferred waits).
+        update_result(
+            job_id, "queued", failure, detail,
+            session_id=session_id, pid=process.pid, infra_failure=True,
+        )
+        LOG.warning(
+            "job=%s infra failure %s/%s requeued without attempt: %s",
+            job_id, infra_retries + 1, INFRA_MAX_RETRIES, failure,
+        )
+        time.sleep(RETRY_DELAY_SECONDS)
+    elif infra_failure:
+        update_result(
+            job_id,
+            "needs_human",
+            f"BROWSER_INFRA_RETRY_LIMIT ({INFRA_MAX_RETRIES}): {failure}",
+            detail,
+            session_id=session_id,
+            pid=process.pid,
+        )
+        LOG.error("job=%s infra retry limit reached: %s", job_id, failure)
+    elif attempts >= MAX_ATTEMPTS:
         update_result(job_id, "needs_human", failure, detail, session_id=session_id, pid=process.pid)
         LOG.error("job=%s needs human review: %s", job_id, failure)
     else:
@@ -1573,11 +1703,16 @@ def claim_next_job(excluded_projects: set[str] | None = None) -> dict[str, Any] 
 def project_allows_parallel(project: str) -> bool:
     config = refresh_project_configs().get(project, {})
     git_config = config.get("git", {})
-    return (
-        isinstance(git_config, dict)
-        and bool(git_config.get("enabled", False))
-        and git_config.get("workspaceMode", "worktree") != "primary"
-    )
+    if not isinstance(git_config, dict) or not bool(git_config.get("enabled", False)):
+        return False
+    if git_config.get("workspaceMode", "worktree") == "primary":
+        return False
+    # Worktrees isolate files but not history: two parallel jobs on the same
+    # repository both rebase onto the base branch at publish time, and the
+    # slower one lands on a GIT_REBASE_CONFLICT after its ChatGPT work is
+    # already done. Same-project jobs therefore run serially unless the
+    # project explicitly opts in.
+    return bool(git_config.get("allowParallelJobs", False))
 
 
 def main() -> int:

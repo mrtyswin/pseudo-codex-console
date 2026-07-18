@@ -188,14 +188,22 @@ def main() -> None:
             "title": "Dirty workspace safety check",
         }
         dirty_workspace, dirty_context = dispatcher.prepare_job_workspace(dirty_job, source.resolve())
-        before_main = git(remote, "rev-parse", "main")
         (dirty_workspace / "app.js").write_text("module.exports = 'candidate';\n", encoding="utf-8")
         (source / "local-only.txt").write_text("dirty\n", encoding="utf-8")
+        # Stray edits in the primary checkout are leftover junk (jobs work in
+        # isolated worktrees). They used to hard-fail the whole deployment as
+        # UBUNTU_WORKSPACE_DIRTY; now they are auto-stashed and kept
+        # recoverable while the publication continues.
         dirty_ok, dirty_detail = dispatcher.publish_git_changes(dirty_job, dirty_context)
-        if dirty_ok or "UBUNTU_WORKSPACE_DIRTY" not in dirty_detail:
+        if not dirty_ok or "PRIMARY_STASH_OK" not in dirty_detail:
             raise AssertionError(dirty_detail)
-        if git(remote, "rev-parse", "main") != before_main:
-            raise AssertionError("remote main changed while Ubuntu workspace was dirty")
+        if (source / "local-only.txt").exists():
+            raise AssertionError("stray file must be stashed out of the primary workspace")
+        stash_list = git(source, "stash", "list")
+        if "pseudo-codex-auto-stash job=" + dirty_job["id"] not in stash_list:
+            raise AssertionError(stash_list)
+        if git(remote, "show", "main:app.js") != "module.exports = 'candidate';":
+            raise AssertionError("auto-recovered publication did not reach remote main")
 
         print("DISPATCHER_GIT_MAIN_SYNC_OK")
     finally:

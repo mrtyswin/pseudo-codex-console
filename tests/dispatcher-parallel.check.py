@@ -44,12 +44,38 @@ with tempfile.TemporaryDirectory() as temporary:
     assert "BROWSER_RESTART_SKIPPED_SHARED_DAEMON" in recovery
     assert "systemctl" not in recovery
 
+    from datetime import datetime, timedelta, timezone
+
+    live_lease = (datetime.now(timezone.utc) + timedelta(seconds=120)).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+    dead_lease = "2020-01-01T00:00:00.000Z"
     module.api_json = lambda method, path, payload=None: (200, {"jobs": [
-        {"id": "failed-job", "status": "running", "stage": "waiting_chatgpt"},
-        {"id": "other-job", "status": "running", "stage": "waiting_chatgpt"},
+        {"id": "failed-job", "status": "running", "stage": "waiting_chatgpt", "leaseExpiresAt": live_lease},
+        {"id": "other-job", "status": "running", "stage": "waiting_chatgpt", "leaseExpiresAt": live_lease},
     ]})
     recovery = module.recover_browser_after_failure("failed-job")
     assert "other active sessions=other-job" in recovery
+
+    # A job whose lease has expired is dead and must not block the restart:
+    # on 2026-07-17 two wedged workers blocked each other all night.
+    module.restart_browser = lambda: "STUB_RESTART"
+    module.api_json = lambda method, path, payload=None: (200, {"jobs": [
+        {"id": "failed-job", "status": "running", "stage": "waiting_chatgpt", "leaseExpiresAt": dead_lease},
+        {"id": "other-job", "status": "running", "stage": "waiting_chatgpt", "leaseExpiresAt": dead_lease},
+    ]})
+    assert module.recover_browser_after_failure("failed-job") == "STUB_RESTART"
+
+    # The consecutive-infra-failure watchdog forces a restart past the guard.
+    forced = module.recover_browser_after_failure("failed-job", force=True)
+    assert "BROWSER_RESTART_FORCED" in forced and "STUB_RESTART" in forced
+
+    assert module.is_infra_failure("ChatGPT browser request failed: [ERROR] spawnSync node ETIMEDOUT")
+    assert module.is_infra_failure("[ERROR] CHATGPT_SEND_BUTTON_UNAVAILABLE after prompt input")
+    assert not module.is_infra_failure("Agent exited 1; completion marker missing.")
+    assert module.FORCED_RESTART_AFTER_FAILURES == 2
+    assert module.note_infra_failure() is False
+    assert module.note_infra_failure() is True
+    assert module.note_infra_failure() is False  # cooldown holds the next one back
+    module.note_browser_responsive()
 
     lock_path = Path(os.environ["PSEUDO_CODEX_STATE_DIR"]) / "browser-restart.lock"
     lock_path.parent.mkdir(parents=True, exist_ok=True)
