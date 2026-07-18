@@ -5105,9 +5105,9 @@ await readBody(request)
     return;
   }
 
-  if (!values.title || !values.instruction) {
+  if (!values.instruction) {
     sendJson(response, 400, {
-      error: "title and instruction are required"
+      error: "instruction is required"
     });
     return;
   }
