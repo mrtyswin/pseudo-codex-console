@@ -1227,8 +1227,8 @@ function jobActions(job) {
 
 function handoffActions(job) {
   var id = encodeURIComponent(job.id);
-  var recoveryButton = ['failed', 'blocked'].includes(job.stage)
-    ? '<button type="button" data-recover-job data-job-id="' + escapeHtml(job.id) + '">別の手をChatGPTに聞く</button>'
+  var recoveryButton = ['completed', 'failed', 'stopped', 'blocked'].includes(job.stage)
+    ? '<button type="button" data-recover-job data-job-id="' + escapeHtml(job.id) + '">この結果の続きで指示</button>'
     : '';
   return '<div class="handoff-actions"><button type="button" data-copy-handoff data-job-id="' +
     escapeHtml(job.id) + '">ChatGPT用引き継ぎをコピー</button>' + recoveryButton +
