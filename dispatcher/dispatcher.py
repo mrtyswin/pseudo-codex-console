@@ -87,6 +87,9 @@ INFRA_FAILURE_MARKERS = (
     # browser losing the response, not the strategy failing: job e04fa67b
     # burned all three attempts on them on 2026-07-18.
     "Waiting failed:",
+    # Node's dropped-connection error carries neither an errno constant nor
+    # "ECONNRESET" in its message.
+    "socket hang up",
 )
 
 
