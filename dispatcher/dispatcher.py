@@ -83,6 +83,10 @@ INFRA_FAILURE_MARKERS = (
     "browser remained unresponsive",
     "ECONNREFUSED",
     "ECONNRESET",
+    # Puppeteer wait timeouts ("Waiting failed: 60000ms exceeded") are the
+    # browser losing the response, not the strategy failing: job e04fa67b
+    # burned all three attempts on them on 2026-07-18.
+    "Waiting failed:",
 )
 
 
