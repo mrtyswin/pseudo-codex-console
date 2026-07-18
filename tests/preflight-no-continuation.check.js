@@ -83,6 +83,10 @@ return job.parentJobId === id;
 });
 }
 
+async function recover(id, instruction) {
+return postJson("/api/jobs/" + id + "/recover", { instruction });
+}
+
 async function runChecks() {
 const token = crypto.randomUUID();
 
@@ -197,6 +201,24 @@ const continuations = await continuationsOf(normal.id);
 assert.equal(continuations.length, 1,
 "a normal failure must still create one continuation job");
 assert.match(continuations[0].title, /別の手で継続 1/);
+
+// 8. The GUI deliberately offers follow-up work for completed jobs.  The API
+// must accept that same terminal state and preserve the user's new request.
+const completed = await createJob("Completed follow-up " + token);
+await claim();
+const completedResult = await postJson("/api/jobs/" + completed.id + "/result", {
+status: "done",
+lastError: "",
+workerLog: "",
+finalAnswer: "completed result",
+executionResult: "",
+verificationResult: ""
+});
+assert.equal(completedResult.stage, "completed");
+const completedContinuation = await recover(completed.id, "結果を確認したので、表示文言だけ直して再検証して。");
+assert.equal(completedContinuation.parentJobId, completed.id);
+assert.match(completedContinuation.instruction, /表示文言だけ直して再検証して/);
+assert.equal(completedContinuation.forceNewConversation, true);
 
 console.log("PREFLIGHT_NO_CONTINUATION_OK");
 }
