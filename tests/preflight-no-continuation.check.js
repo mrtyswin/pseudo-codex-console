@@ -131,7 +131,62 @@ assert.equal((await continuationsOf(deploymentConfig.id)).length, 0,
 "deployment configuration failure must not create a continuation job");
 assert.match(deploymentConfigFailed.autoHandoffStatus, /自動継続なし/);
 
-// 5. A normal implementation failure must still create exactly one continuation.
+// 5. A message-cap wait must release the worker, preserve the retry budget,
+// and remain unclaimable until its scheduled retry time.
+const delayed = await createJob("Deferred message limit " + token);
+const delayedClaim = await claim();
+assert.equal(delayedClaim.id, delayed.id);
+assert.ok(delayedClaim.executionStartedAt, "the first claim must start the overall job clock");
+const ready = await createJob("Ready behind deferred " + token);
+const futureRetryAt = new Date(Date.now() + 60_000).toISOString();
+const deferred = await failJob(delayed.id, {
+status: "deferred",
+lastError: "ChatGPT message limit wait scheduled.",
+retryAt: futureRetryAt,
+messageLimitWaits: 1
+});
+assert.equal(deferred.stage, "queued");
+assert.equal(deferred.attempts, 0, "capacity waits must not consume real retry attempts");
+assert.equal(deferred.retryAt, futureRetryAt);
+assert.equal(deferred.messageLimitWaits, 1);
+const summary = await requestJson("/api/jobs?view=summary");
+const summaryDeferred = summary.jobs.find(function(job) { return job.id === delayed.id; });
+assert.equal(summaryDeferred.retryAt, futureRetryAt,
+"the list summary must expose the scheduled message-cap retry time");
+assert.equal(summaryDeferred.messageLimitWaits, 1,
+"the list summary must expose the scheduled message-cap wait count");
+const readyClaim = await claim();
+assert.equal(readyClaim.id, ready.id, "a future deferred job must not block the next ready job");
+
+const pastRetryAt = new Date(Date.now() - 1_000).toISOString();
+await failJob(delayed.id, {
+status: "deferred",
+lastError: "Retry window opened.",
+retryAt: pastRetryAt,
+messageLimitWaits: 2
+});
+const resumedClaim = await claim();
+assert.equal(resumedClaim.id, delayed.id, "the deferred job must become claimable after retryAt");
+assert.equal(resumedClaim.retryAt, "", "claiming clears the scheduled wait timestamp");
+assert.equal(resumedClaim.messageLimitWaits, 2);
+assert.equal(resumedClaim.executionStartedAt, delayedClaim.executionStartedAt,
+"a deferred retry must retain the original overall job clock");
+
+// 6. Exhausting the message-cap wait budget is an account-capacity problem,
+// not an alternative implementation opportunity, so it must not fan out.
+const exhausted = await createJob("Message limit exhausted " + token);
+const exhaustedClaim = await claim();
+assert.equal(exhaustedClaim.id, exhausted.id);
+const exhaustedFailed = await failJob(exhausted.id, {
+lastError: "ChatGPT message limit persisted after 4 deferred waits.",
+workerLog: "message_limit_wait_exhausted"
+});
+assert.equal(exhaustedFailed.stage, "failed");
+assert.equal((await continuationsOf(exhausted.id)).length, 0,
+"exhausted message-cap waits must not create a fresh continuation budget");
+assert.match(exhaustedFailed.autoHandoffStatus, /自動継続なし/);
+
+// 7. A normal implementation failure must still create exactly one continuation.
 const normal = await createJob("Normal failure " + token);
 await claim();
 const normalFailed = await failJob(normal.id, {

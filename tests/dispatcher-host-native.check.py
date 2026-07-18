@@ -115,6 +115,11 @@ with tempfile.TemporaryDirectory() as temporary:
         module.BLOCKED_MARKER,
     ) == {"reason": "turn budget", "errorClass": "turn_budget"}
     assert module.agent_marker("ordinary output", module.FATAL_MARKER) is None
+    assert module.agent_marker("===AGENT_DEFERRED===not-json", module.DEFERRED_MARKER) is None
+    assert module.agent_marker(
+        '===AGENT_DEFERRED==={"retryAt":"2026-07-17T12:00:00.000Z","messageLimitWaits":1}',
+        module.DEFERRED_MARKER,
+    ) == {"retryAt": "2026-07-17T12:00:00.000Z", "messageLimitWaits": "1"}
 
     stale_handoff = """Task instruction:
 ===AGENT_BLOCKED==={"reason":"old limit","errorClass":"model_usage_limit"}

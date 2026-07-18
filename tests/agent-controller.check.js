@@ -12,12 +12,15 @@ assert.ok(fs.existsSync(agentPath), "agent.js was not found: " + agentPath);
 const agentSource = fs.readFileSync(agentPath, "utf8");
 assert.match(
   agentSource,
-  /CHATGPT_REQUEST_TIMEOUT_MS \|\| '600000'/,
+  /CHATGPT_REQUEST_TIMEOUT_MS \|\| '1200000'/,
   "outer request timeout must cover the browser recovery window plus in-call throttle waits"
 );
 assert.match(agentSource, /PSEUDO_CODEX_MESSAGE_LIMIT_WAIT_MS \|\| '1800000'/);
+assert.match(agentSource, /PSEUDO_CODEX_MESSAGE_LIMIT_MAX_WAITS \|\| '4'/);
 assert.match(agentSource, /CHATGPT_MESSAGE_LIMIT\/m\.test\(response\)/);
 assert.match(agentSource, /errorClass: 'message_limit_wait'/);
+assert.match(agentSource, /const DEFERRED_MARKER = '===AGENT_DEFERRED===';/);
+assert.match(agentSource, /strategyResets >= BASE_STRATEGY_RESETS && !passChangedWorkspace/);
 
 const { parseRunBlocks } = require(agentPath);
 assert.deepEqual(
@@ -69,6 +72,7 @@ if (state.newChats < 2) {
 try {
   const limitWorkspace = path.join(root, "limit-workspace");
   const limitStateFile = path.join(root, "limit-state.json");
+  const limitSessionFile = path.join(root, "limit-session", "chat.url");
   const limitFakeChatGpt = path.join(root, "fake-message-limit.js");
   fs.mkdirSync(limitWorkspace, { recursive: true });
   fs.writeFileSync(limitFakeChatGpt, `
@@ -80,7 +84,7 @@ let calls = 0;
 try { calls = JSON.parse(fs.readFileSync(statePath, "utf8")).calls; } catch (_error) {}
 calls += 1;
 fs.writeFileSync(statePath, JSON.stringify({ calls, isNew: args.includes("--new") }));
-if (calls === 1) {
+if (process.env.FAKE_ALWAYS_LIMIT === "1" || calls === 1) {
   process.stderr.write("CHATGPT_MESSAGE_LIMIT: メッセージの上限に到達しました");
   process.exit(1);
 }
@@ -88,14 +92,13 @@ process.stdout.write("Message-limit retry verified.\\n===TASK_COMPLETE===");
 `, { mode: 0o700 });
   const limitResult = childProcess.spawnSync(
     process.execPath,
-    [agentPath, "--auto", "--cwd", limitWorkspace, "message limit wait check"],
+    [agentPath, "--auto", "--cwd", limitWorkspace, "--session-file", limitSessionFile, "message limit wait check"],
     {
       encoding: "utf8",
       timeout: 10000,
       env: {
         ...process.env,
         PSEUDO_CODEX_CHATGPT_SCRIPT: limitFakeChatGpt,
-        PSEUDO_CODEX_MESSAGE_LIMIT_WAIT_MS: "5",
         FAKE_LIMIT_STATE_FILE: limitStateFile
       }
     }
@@ -103,8 +106,51 @@ process.stdout.write("Message-limit retry verified.\\n===TASK_COMPLETE===");
   const limitOutput = (limitResult.stdout || "") + (limitResult.stderr || "");
   assert.equal(limitResult.status, 0, limitOutput);
   assert.match(limitOutput, /\[message limit\]/);
-  assert.match(limitOutput, /===TASK_COMPLETE===/);
+  assert.match(limitOutput, /===AGENT_DEFERRED===/);
+  assert.doesNotMatch(limitOutput, /===TASK_COMPLETE===/);
+  assert.equal(JSON.parse(fs.readFileSync(limitStateFile, "utf8")).calls, 1);
+  assert.ok(fs.existsSync(path.join(root, "limit-session", "deferred-state.json")));
+
+  const resumedLimitResult = childProcess.spawnSync(
+    process.execPath,
+    [agentPath, "--auto", "--cwd", limitWorkspace, "--session-file", limitSessionFile,
+      "--message-limit-waits", "1", "message limit wait check"],
+    {
+      encoding: "utf8",
+      timeout: 10000,
+      env: {
+        ...process.env,
+        PSEUDO_CODEX_CHATGPT_SCRIPT: limitFakeChatGpt,
+        FAKE_LIMIT_STATE_FILE: limitStateFile
+      }
+    }
+  );
+  const resumedLimitOutput = (resumedLimitResult.stdout || "") + (resumedLimitResult.stderr || "");
+  assert.equal(resumedLimitResult.status, 0, resumedLimitOutput);
+  assert.match(resumedLimitOutput, /Restored deferred controller state/);
+  assert.match(resumedLimitOutput, /===TASK_COMPLETE===/);
   assert.equal(JSON.parse(fs.readFileSync(limitStateFile, "utf8")).calls, 2);
+  assert.ok(!fs.existsSync(path.join(root, "limit-session", "deferred-state.json")));
+
+  const exhaustedStateFile = path.join(root, "limit-exhausted-state.json");
+  const exhaustedResult = childProcess.spawnSync(
+    process.execPath,
+    [agentPath, "--auto", "--cwd", limitWorkspace, "--message-limit-waits", "4", "message limit exhausted"],
+    {
+      encoding: "utf8",
+      timeout: 10000,
+      env: {
+        ...process.env,
+        PSEUDO_CODEX_CHATGPT_SCRIPT: limitFakeChatGpt,
+        PSEUDO_CODEX_MESSAGE_LIMIT_MAX_WAITS: "4",
+        FAKE_ALWAYS_LIMIT: "1",
+        FAKE_LIMIT_STATE_FILE: exhaustedStateFile
+      }
+    }
+  );
+  const exhaustedOutput = (exhaustedResult.stdout || "") + (exhaustedResult.stderr || "");
+  assert.equal(exhaustedResult.status, 78, exhaustedOutput);
+  assert.match(exhaustedOutput, /message_limit_wait_exhausted/);
 
   const result = childProcess.spawnSync(
     process.execPath,

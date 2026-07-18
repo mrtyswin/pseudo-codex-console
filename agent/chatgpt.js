@@ -611,8 +611,9 @@ async function dismissLimitNotice(page) {
   }).catch(() => {});
 }
 
-// The combined wait (retries x wait) must stay well under the caller's
-// CHATGPT_REQUEST_TIMEOUT_MS or the whole request dies with ETIMEDOUT.
+// Exponential waits give an account-level throttle time to clear instead of
+// spending all retries at the same short interval. The caller's request
+// timeout must exceed their combined duration.
 const THROTTLE_RETRY_LIMIT = Number.parseInt(process.env.PSEUDO_CODEX_THROTTLE_RETRIES || '3', 10);
 const THROTTLE_WAIT_MS = Number.parseInt(process.env.PSEUDO_CODEX_THROTTLE_WAIT_MS || '90000', 10);
 
@@ -638,12 +639,13 @@ async function throwIfUsageLimited(page, log) {
         `CHATGPT_THROTTLED: request throttle persisted after ${THROTTLE_RETRY_LIMIT} waits: ${detected.text}`
       );
     }
-    throttleBackoffUntil = Math.max(throttleBackoffUntil, Date.now() + THROTTLE_WAIT_MS);
+    const waitMs = THROTTLE_WAIT_MS * (2 ** (attempt - 1));
+    throttleBackoffUntil = Math.max(throttleBackoffUntil, Date.now() + waitMs);
     log(
-      `ChatGPT request throttle detected; waiting ${Math.round(THROTTLE_WAIT_MS / 1000)}s ` +
+      `ChatGPT request throttle detected; waiting ${Math.round(waitMs / 1000)}s ` +
       `before continuing (attempt ${attempt}/${THROTTLE_RETRY_LIMIT}).`
     );
-    await new Promise(resolve => setTimeout(resolve, THROTTLE_WAIT_MS));
+    await new Promise(resolve => setTimeout(resolve, waitMs));
     detected = await detectUsageLimit(page);
   }
   if (!detected) return;

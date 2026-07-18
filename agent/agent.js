@@ -39,12 +39,14 @@ const MAX_TURNS = Number.parseInt(process.env.PSEUDO_CODEX_MAX_TURNS || '30', 10
 const MAX_IDENTICAL_ERRORS = Number.parseInt(process.env.PSEUDO_CODEX_MAX_IDENTICAL_ERRORS || '3', 10);
 const MAX_NO_PROGRESS_TURNS = Number.parseInt(process.env.PSEUDO_CODEX_MAX_NO_PROGRESS_TURNS || '6', 10);
 const MAX_STRATEGY_RESETS = Number.parseInt(process.env.PSEUDO_CODEX_MAX_STRATEGY_RESETS || '3', 10);
+const BASE_STRATEGY_RESETS = Number.parseInt(process.env.PSEUDO_CODEX_BASE_STRATEGY_RESETS || '2', 10);
 const MAX_INSPECT_TURNS = Number.parseInt(process.env.PSEUDO_CODEX_MAX_INSPECT_TURNS || '8', 10);
 const MAX_CONTEXT_CHARS = Number.parseInt(process.env.PSEUDO_CODEX_MAX_CONTEXT_CHARS || '200000', 10);
 const COMPLETE_MARKER = '===TASK_COMPLETE===';
 // The dispatcher is the only component allowed to transition a job to a
 // terminal state. These markers carry an agent-side decision without racing it.
 const BLOCKED_MARKER = '===AGENT_BLOCKED===';
+const DEFERRED_MARKER = '===AGENT_DEFERRED===';
 const FATAL_MARKER = '===AGENT_FATAL===';
 const FINAL_MARKER = '===AGENT_FINAL===';
 const GITHUB_COMPLETE_START = '===GITHUB_COMPLETE===';
@@ -53,13 +55,17 @@ const GITHUB_DIRECT_MAX_TURNS = Number.parseInt(process.env.PSEUDO_CODEX_GITHUB_
 const CHATGPT_REQUEST_TIMEOUT_MS = Number.parseInt(
   // Must exceed browser navigation retry plus response reload/resubmit
   // recovery, PLUS the in-call throttle waits (PSEUDO_CODEX_THROTTLE_RETRIES x
-  // PSEUDO_CODEX_THROTTLE_WAIT_MS, 3x90s by default): the throttle pause runs
-  // inside this same request and a lower cap kills it with ETIMEDOUT.
-  process.env.CHATGPT_REQUEST_TIMEOUT_MS || '600000',
+  // PSEUDO_CODEX_THROTTLE_WAIT_MS with exponential backoff): the throttle
+  // pause runs inside this same request and a lower cap kills it with ETIMEDOUT.
+  process.env.CHATGPT_REQUEST_TIMEOUT_MS || '1200000',
   10
 );
 const MESSAGE_LIMIT_WAIT_MS = Number.parseInt(
   process.env.PSEUDO_CODEX_MESSAGE_LIMIT_WAIT_MS || '1800000',
+  10
+);
+const MESSAGE_LIMIT_MAX_WAITS = Number.parseInt(
+  process.env.PSEUDO_CODEX_MESSAGE_LIMIT_MAX_WAITS || '4',
   10
 );
 const COMMAND_OUTPUT_LIMIT = Number.parseInt(
@@ -101,7 +107,8 @@ function parseArgs(argv) {
     githubRepository: process.env.PSEUDO_CODEX_GITHUB_REPOSITORY || '',
     githubBaseBranch: process.env.PSEUDO_CODEX_GITHUB_BASE_BRANCH || 'main',
     githubBranch: process.env.PSEUDO_CODEX_GITHUB_BRANCH || '',
-    githubPullRequestRequired: true
+    githubPullRequestRequired: true,
+    messageLimitWaits: 0
   };
   for (let i = 0; i < argv.length; i++) {
     if      (argv[i] === '--files') args.files = argv[++i].split(',').map(s => s.trim());
@@ -125,6 +132,9 @@ function parseArgs(argv) {
     else if (argv[i] === '--github-repository') args.githubRepository = argv[++i];
     else if (argv[i] === '--github-base-branch') args.githubBaseBranch = argv[++i];
     else if (argv[i] === '--github-branch') args.githubBranch = argv[++i];
+    else if (argv[i] === '--message-limit-waits') {
+      args.messageLimitWaits = Math.max(0, Number.parseInt(argv[++i] || '0', 10) || 0);
+    }
     else                            args.task  = argv[i];
   }
   return args;
@@ -1170,6 +1180,37 @@ async function main() {
   const errorFingerprintCounts = new Map();
   const recoveryHistory = [];
   let strategyResets = 0;
+  let strategyStartDigest = lastSnapshot.digest;
+  const deferredStatePath = args.sessionFile
+    ? path.join(path.dirname(args.sessionFile), 'deferred-state.json')
+    : null;
+
+  if (deferredStatePath && fs.existsSync(deferredStatePath)) {
+    try {
+      const deferredState = JSON.parse(fs.readFileSync(deferredStatePath, 'utf8'));
+      if (typeof deferredState.prompt === 'string' && deferredState.prompt) prompt = deferredState.prompt;
+      if (typeof deferredState.isNew === 'boolean') isNew = deferredState.isNew;
+      if (Number.isSafeInteger(deferredState.turns) && deferredState.turns >= 0) turns = deferredState.turns;
+      if (typeof deferredState.phase === 'string') phase = deferredState.phase;
+      hasEdited = deferredState.hasEdited === true;
+      mutationIntentSeen = deferredState.mutationIntentSeen === true;
+      verificationPassed = deferredState.verificationPassed === true;
+      if (Number.isSafeInteger(deferredState.noProgressTurns)) noProgressTurns = deferredState.noProgressTurns;
+      if (Number.isSafeInteger(deferredState.inspectTurns)) inspectTurns = deferredState.inspectTurns;
+      if (Number.isSafeInteger(deferredState.strategyResets)) strategyResets = deferredState.strategyResets;
+      for (const file of deferredState.changedFiles || []) changedFiles.add(String(file));
+      transactions.push(...(Array.isArray(deferredState.transactions) ? deferredState.transactions : []));
+      executionLog.push(...(Array.isArray(deferredState.executionLog) ? deferredState.executionLog : []));
+      verificationLog.push(...(Array.isArray(deferredState.verificationLog) ? deferredState.verificationLog : []));
+      recoveryHistory.push(...(Array.isArray(deferredState.recoveryHistory) ? deferredState.recoveryHistory : []));
+      for (const [key, value] of deferredState.errorClassCounts || []) errorClassCounts.set(key, value);
+      for (const [key, value] of deferredState.errorFingerprintCounts || []) errorFingerprintCounts.set(key, value);
+      strategyStartDigest = String(deferredState.strategyStartDigest || lastSnapshot.digest);
+      console.error(`[resume] Restored deferred controller state from ${deferredStatePath}`);
+    } catch (error) {
+      console.error(`[resume warning] Could not restore deferred state: ${error.message}`);
+    }
+  }
 
   const statePayload = extra => ({
     phase,
@@ -1204,6 +1245,39 @@ async function main() {
       fs.chmodSync(checkpointPath, 0o600);
     }
     return text;
+  };
+
+  const saveDeferredState = () => {
+    if (!deferredStatePath) return null;
+    fs.mkdirSync(path.dirname(deferredStatePath), { recursive: true });
+    fs.writeFileSync(deferredStatePath, JSON.stringify({
+      prompt,
+      isNew,
+      turns,
+      phase,
+      hasEdited,
+      mutationIntentSeen,
+      verificationPassed,
+      noProgressTurns,
+      inspectTurns,
+      changedFiles: [...changedFiles],
+      transactions: transactions.slice(-100),
+      executionLog: executionLog.slice(-100),
+      verificationLog: verificationLog.slice(-100),
+      errorClassCounts: [...errorClassCounts.entries()],
+      errorFingerprintCounts: [...errorFingerprintCounts.entries()],
+      recoveryHistory: recoveryHistory.slice(-10),
+      strategyResets,
+      strategyStartDigest,
+    }, null, 2), { encoding: 'utf8', mode: 0o600 });
+    fs.chmodSync(deferredStatePath, 0o600);
+    return deferredStatePath;
+  };
+
+  const clearDeferredState = () => {
+    if (deferredStatePath && fs.existsSync(deferredStatePath)) {
+      fs.unlinkSync(deferredStatePath);
+    }
   };
 
   const blockJob = async (reason, errorClass) => {
@@ -1280,6 +1354,15 @@ async function main() {
 
   const startFreshStrategy = async (reason, errorClass, evidence) => {
     if (strategyResets >= MAX_STRATEGY_RESETS) return false;
+    const currentSnapshot = workspaceSnapshot(args.cwd);
+    const passChangedWorkspace = currentSnapshot.digest !== strategyStartDigest;
+    if (strategyResets >= BASE_STRATEGY_RESETS && !passChangedWorkspace) {
+      console.error(
+        `[strategy reset refused] pass=${strategyResets + 1} made no workspace changes; ` +
+        `conditional reset ${strategyResets + 1}/${MAX_STRATEGY_RESETS} was not granted.`
+      );
+      return false;
+    }
     archiveCurrentConversation(reason);
     strategyResets += 1;
     recoveryHistory.push({
@@ -1294,6 +1377,7 @@ async function main() {
     errorClassCounts.clear();
     errorFingerprintCounts.clear();
     turns = 0;
+    strategyStartDigest = currentSnapshot.digest;
     isNew = true;
     prompt = [
       `RECOVERY STRATEGY PASS ${strategyResets + 1} of ${MAX_STRATEGY_RESETS + 1}.`,
@@ -1360,23 +1444,42 @@ async function main() {
     await reportProgress(args, 'waiting_chatgpt', 'ChatGPT回答待ち turn=' + turns, statePayload({}));
     const sentPrompt = compactContext(prompt);
     const sentAt = new Date().toISOString();
-    let response;
-    while (true) {
-      response = ask(sentPrompt, isNew, args.sessionFile, args.sessionKey);
-      if (!/^\[ERROR\].*CHATGPT_MESSAGE_LIMIT/m.test(response)) break;
+    const response = ask(sentPrompt, isNew, args.sessionFile, args.sessionKey);
+    if (/^\[ERROR\].*CHATGPT_MESSAGE_LIMIT/m.test(response)) {
+      const nextWait = args.messageLimitWaits + 1;
+      if (nextWait > MESSAGE_LIMIT_MAX_WAITS) {
+        clearDeferredState();
+        await blockJob(
+          `ChatGPT message limit persisted after ${MESSAGE_LIMIT_MAX_WAITS} deferred waits.`,
+          'message_limit_wait_exhausted'
+        );
+        return;
+      }
 
       const waitMinutes = Math.round(MESSAGE_LIMIT_WAIT_MS / 60_000);
-      const waitUntil = new Date(Date.now() + MESSAGE_LIMIT_WAIT_MS).toISOString();
-      const waitMessage = `ChatGPTのメッセージ上限を検出。このジョブのみ${waitMinutes}分待機して同じ送信を再試行`;
-      console.error(`[message limit] ${waitMessage} (until ${waitUntil})`);
+      const retryAt = new Date(Date.now() + MESSAGE_LIMIT_WAIT_MS).toISOString();
+      const waitMessage = `ChatGPTのメッセージ上限を検出。実行枠を解放し、${waitMinutes}分後に同じ送信を再試行 (${nextWait}/${MESSAGE_LIMIT_MAX_WAITS})`;
+      // The prompt never reached ChatGPT, so returning it to the queue must
+      // not consume either the conversation turn or the controller budget.
+      turns = Math.max(0, turns - 1);
+      const stateFile = saveDeferredState();
+      console.error(`[message limit] ${waitMessage} (retryAt ${retryAt})`);
       await reportProgress(
         args,
         'waiting_chatgpt',
         waitMessage,
-        statePayload({ errorClass: 'message_limit_wait', waitUntil })
+        statePayload({ errorClass: 'message_limit_wait', retryAt })
       );
-      await new Promise(resolve => setTimeout(resolve, MESSAGE_LIMIT_WAIT_MS));
+      console.error(DEFERRED_MARKER + JSON.stringify({
+        reason: waitMessage,
+        errorClass: 'message_limit_wait',
+        retryAt,
+        messageLimitWaits: nextWait,
+        stateFile: stateFile || 'none',
+      }));
+      return;
     }
+    clearDeferredState();
     isNew = false;
     const metadata = conversationMetadata(args);
     if (metadata.chatConversationUrl) {

@@ -73,6 +73,13 @@ def main() -> None:
         (source / "app.js").write_text("module.exports = 'abandoned';\n", encoding="utf-8")
         (source / "leftover.txt").write_text("untracked leftover\n", encoding="utf-8")
 
+        # A message-cap deferral must be able to return to the same primary
+        # workspace without discarding its already-valid edits.
+        ready, detail = dispatcher.validate_primary_workspace(source, "main")
+        assert not ready and detail == "UBUNTU_WORKSPACE_DIRTY", detail
+        ready, detail = dispatcher.validate_primary_workspace(source, "main", allow_dirty_resume=True)
+        assert ready and detail == "UBUNTU_WORKSPACE_RESUME_DIRTY", detail
+
         note = dispatcher.quarantine_primary_workspace("job-dirty", context)
         assert note.startswith("PRIMARY_WORKSPACE_QUARANTINED"), note
         assert "workspace=clean" in note, note

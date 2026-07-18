@@ -40,6 +40,7 @@ timeZone: "Asia/Tokyo"
 const RESULT_STATUSES = new Set([
 "done",
 "completed",
+"deferred",
 "queued",
 "needs_human",
 "failed",
@@ -261,7 +262,11 @@ escapeHtml((job.changedFiles || []).length) +
 "</strong></span><span>戦略パス: <strong>" +
 escapeHtml(job.strategyPass || 1) +
 "</strong></span></div>" +
-(job.workerId
+(job.retryAt
+? "<div class="runtime">ChatGPT上限待機 · 再開予定: " +
+escapeHtml(formatDateForDisplay(job.retryAt)) + " · 待機回数: " +
+escapeHtml(job.messageLimitWaits || 0) + "/4</div>"
+: job.workerId
 ? "<div class="runtime">Worker: " +
 escapeHtml(job.workerId) + " · PID: " +
 escapeHtml(job.pid || "-") +
@@ -1259,7 +1264,11 @@ function jobRowSummary(job) {
     stopped: '停止',
     blocked: '保留'
   };
-  var state = stateLabels[job.stage] || job.displayStatus || job.stage || '不明';
+  var retryAt = job.retryAt ? new Date(job.retryAt).getTime() : Number.NaN;
+  var waitingForLimit = job.stage === 'queued' && Number.isFinite(retryAt) && retryAt > Date.now();
+  var state = waitingForLimit
+    ? '上限待機'
+    : (stateLabels[job.stage] || job.displayStatus || job.stage || '不明');
   var owner = job.workerId || job.assignee || '未割当';
   return '<div class="job-row-summary"><span class="job-identity"><strong>' +
     escapeHtml(job.title || '無題') + '</strong><small class="job-created">作成 ' +
@@ -1273,8 +1282,11 @@ function jobRowSummary(job) {
 
 function renderJob(job) {
   var phase = phaseDescription(job.phase || 'INSPECT');
-  var runtime = job.workerId ? '<div class="runtime">Worker: ' + escapeHtml(job.workerId) +
-    ' · PID: ' + escapeHtml(job.pid || '-') + ' · 最終heartbeat: ' + escapeHtml(formatDate(job.heartbeatAt)) + '</div>' : '';
+  var runtime = job.retryAt
+    ? '<div class="runtime">ChatGPT上限待機 · 再開予定: ' + escapeHtml(formatDate(job.retryAt)) +
+      ' · 待機回数: ' + escapeHtml(job.messageLimitWaits || 0) + '/4</div>'
+    : (job.workerId ? '<div class="runtime">Worker: ' + escapeHtml(job.workerId) +
+      ' · PID: ' + escapeHtml(job.pid || '-') + ' · 最終heartbeat: ' + escapeHtml(formatDate(job.heartbeatAt)) + '</div>' : '');
   return '<article id="job-' + escapeHtml(job.id) + '" class="job" data-job-id="' + escapeHtml(job.id) + '" data-updated-at="' +
     escapeHtml(job.updatedAt) + '">' + jobRowSummary(job) + '<div class="job-head"><div><h3>' + escapeHtml(job.title || '無題') +
     '</h3><p class="meta">登録: ' + escapeHtml(formatDate(job.createdAt)) + ' · ' + escapeHtml(job.project) +
@@ -2096,7 +2108,12 @@ sessionId: normalizeString(source.sessionId),
 pid: Number.isSafeInteger(source.pid) && source.pid > 0 ? source.pid : null,
 heartbeatAt: normalizeOptionalDate(source.heartbeatAt),
 activityAt: normalizeOptionalDate(source.activityAt) || updatedAt,
+executionStartedAt: normalizeOptionalDate(source.executionStartedAt),
 leaseExpiresAt: normalizeOptionalDate(source.leaseExpiresAt),
+retryAt: normalizeOptionalDate(source.retryAt),
+messageLimitWaits: Number.isSafeInteger(source.messageLimitWaits) && source.messageLimitWaits >= 0
+? source.messageLimitWaits
+: 0,
 currentTurn: Number.isSafeInteger(source.currentTurn) && source.currentTurn >= 0
 ? source.currentTurn
 : 0,
@@ -2172,6 +2189,8 @@ stage: job.stage,
 assignee: job.assignee,
 displayStatus: job.displayStatus,
 workerId: job.workerId,
+retryAt: job.retryAt,
+messageLimitWaits: job.messageLimitWaits,
 phase: job.phase,
 searchText: String(job.instruction || "").slice(0, 1000)
 };
@@ -2915,7 +2934,9 @@ verificationResult: String(value.verificationResult || ""),
 workerId: String(value.workerId || "").trim().slice(0, 200),
 sessionId: String(value.sessionId || "").trim().slice(0, 200),
 pid: boundedInteger(value.pid, 1, 2147483647, null),
-preflight: value.preflight === true
+preflight: value.preflight === true,
+retryAt: String(value.retryAt || ""),
+messageLimitWaits: boundedInteger(value.messageLimitWaits, 0, 1000, null)
 };
 }
 
@@ -2977,7 +2998,10 @@ sessionId: "",
 pid: null,
 heartbeatAt: "",
 activityAt: now,
+executionStartedAt: "",
 leaseExpiresAt: "",
+retryAt: "",
+messageLimitWaits: 0,
 currentTurn: 0,
 currentCommand: "",
 phase: "INSPECT",
@@ -3062,6 +3086,11 @@ for (let index = 0; index < jobs.length; index += 1) {
     continue;
   }
 
+  const retryTime = job.retryAt ? new Date(job.retryAt).getTime() : Number.NaN;
+  if (Number.isFinite(retryTime) && retryTime > Date.now()) {
+    continue;
+  }
+
   const timestamp = new Date(job.createdAt).getTime();
   const comparableTime = Number.isNaN(timestamp) ? 0 : timestamp;
 
@@ -3080,7 +3109,12 @@ if (selectedIndex === -1) {
 
 const job = jobs[selectedIndex];
 job.attempts += 1;
-job.activityAt = new Date().toISOString();
+job.retryAt = "";
+const claimTime = new Date().toISOString();
+job.activityAt = claimTime;
+if (!job.executionStartedAt) {
+job.executionStartedAt = claimTime;
+}
 applyWorkerLease(job, worker);
 applyStage(
   job,
@@ -3249,6 +3283,9 @@ job.sessionId = "";
 job.pid = null;
 job.heartbeatAt = "";
 job.leaseExpiresAt = "";
+job.executionStartedAt = "";
+job.retryAt = "";
+job.messageLimitWaits = 0;
 job.currentCommand = "";
 applyStage(job, "queued", "手動で再実行待ちへ移動");
 return job;
@@ -3280,7 +3317,9 @@ const NON_CONTINUABLE_FAILURE_PATTERN = new RegExp([
 "Automatic production deployment or verification failed",
 "MODEL_USAGE_LIMIT",
 "Model usage limit detected",
-"CHATGPT_THROTTLED"
+"CHATGPT_THROTTLED",
+"message_limit_wait_exhausted",
+"ChatGPT message limit persisted"
 ].join("|"));
 
 function isNonContinuableFailure(result) {
@@ -3364,7 +3403,10 @@ sessionId: "",
 pid: null,
 heartbeatAt: "",
 activityAt: now,
+executionStartedAt: "",
 leaseExpiresAt: "",
+retryAt: "",
+messageLimitWaits: 0,
 currentTurn: 0,
 currentCommand: "",
 phase: "INSPECT",
@@ -3451,6 +3493,18 @@ job.workerLog = compactText(result.workerLog, WORKER_LOG_LIMIT);
 job.finalAnswer = compactText(result.finalAnswer, 50000);
 job.executionResult = compactText(result.executionResult, 50000);
 job.verificationResult = compactText(result.verificationResult, 50000);
+const deferred = result.status === "deferred";
+if (deferred) {
+job.retryAt = normalizeOptionalDate(result.retryAt);
+if (Number.isSafeInteger(result.messageLimitWaits)) {
+job.messageLimitWaits = result.messageLimitWaits;
+}
+// A scheduled capacity wait is not an execution failure and must not consume
+// one of the dispatcher's real retry attempts.
+job.attempts = Math.max(0, job.attempts - 1);
+} else if (result.status !== "queued") {
+job.retryAt = "";
+}
 
 const composed = composeResult(result);
 const logResult = readAllowedResultLog(result.workerLog);
@@ -3479,6 +3533,11 @@ if (
   applyStage(job, "blocked", result.lastError || "自動継続を保留");
 } else {
 applyStage(job, "queued", "再実行待ちへ戻す");
+job.workerId = "";
+job.sessionId = "";
+job.pid = null;
+job.heartbeatAt = "";
+job.leaseExpiresAt = "";
 }
 
 if (["failed", "blocked"].includes(job.stage)) {
@@ -3672,6 +3731,12 @@ return values.length ? '<div class="recovery-info">' + values.join('<br>') + '</
 }
 
 function renderRuntime(job) {
+if (job.retryAt) {
+return [
+'<div class="runtime">ChatGPT上限待機 · 再開予定: ', escapeHtml(formatDateForDisplay(job.retryAt)),
+' · 待機回数: ', escapeHtml(job.messageLimitWaits || 0), '/4</div>'
+].join("");
+}
 if (!job.workerId) {
 return "";
 }
@@ -3743,7 +3808,11 @@ failed: "失敗",
 stopped: "停止",
 blocked: "保留"
 };
-const state = stageLabels[job.stage] || job.displayStatus || job.stage || "不明";
+const retryAt = job.retryAt ? new Date(job.retryAt).getTime() : Number.NaN;
+const waitingForLimit = job.stage === "queued" && Number.isFinite(retryAt) && retryAt > Date.now();
+const state = waitingForLimit
+? "上限待機"
+: (stageLabels[job.stage] || job.displayStatus || job.stage || "不明");
 const owner = job.workerId || job.assignee || "未割当";
 return [
 '<div class="job-row-summary">',
@@ -4904,7 +4973,7 @@ await readBody(request)
   if (!RESULT_STATUSES.has(values.status)) {
     sendJson(response, 400, {
       error:
-        "status must be done, completed, queued, needs_human, failed, stopped, or blocked"
+        "status must be done, completed, deferred, queued, needs_human, failed, stopped, or blocked"
     });
     return;
   }

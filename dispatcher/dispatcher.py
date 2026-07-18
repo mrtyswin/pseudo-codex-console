@@ -31,7 +31,7 @@ STATE_DIR = Path(os.environ.get("PSEUDO_CODEX_STATE_DIR", str(HOME / ".local/sta
 POLL_SECONDS = int(os.environ.get("PSEUDO_CODEX_POLL_SECONDS", "5"))
 MAX_ATTEMPTS = int(os.environ.get("JOB_MAX_ATTEMPTS", os.environ.get("PSEUDO_CODEX_MAX_ATTEMPTS", "3")))
 TOTAL_TIMEOUT_SECONDS = int(
-    os.environ.get("JOB_TOTAL_TIMEOUT_SECONDS", os.environ.get("PSEUDO_CODEX_JOB_TIMEOUT_SECONDS", "43200"))
+    os.environ.get("JOB_TOTAL_TIMEOUT_SECONDS", os.environ.get("PSEUDO_CODEX_JOB_TIMEOUT_SECONDS", "14400"))
 )
 IDLE_TIMEOUT_SECONDS = int(os.environ.get("JOB_IDLE_TIMEOUT_SECONDS", "2700"))
 RETRY_DELAY_SECONDS = int(os.environ.get("JOB_RETRY_DELAY_SECONDS", "30"))
@@ -49,6 +49,7 @@ PROJECT_CONFIG_PATH = Path(
 PROJECT_PATTERN = re.compile(r"^[a-z0-9][a-z0-9-]{0,63}$")
 COMPLETE_MARKER = "===TASK_COMPLETE==="
 BLOCKED_MARKER = "===AGENT_BLOCKED==="
+DEFERRED_MARKER = "===AGENT_DEFERRED==="
 FATAL_MARKER = "===AGENT_FATAL==="
 FINAL_MARKER = "===AGENT_FINAL==="
 BROWSER_SERVICE = os.environ.get("PSEUDO_CODEX_BROWSER_SERVICE", "chatgpt-browser-agent.service")
@@ -79,9 +80,9 @@ def agent_marker(output: str, marker: str) -> dict[str, str] | None:
         try:
             value = json.loads(line[len(marker) :])
         except json.JSONDecodeError:
-            return {}
+            return None
         if not isinstance(value, dict):
-            return {}
+            return None
         return {str(key): str(item) for key, item in value.items() if item is not None}
     return None
 
@@ -278,16 +279,21 @@ def git_head(workspace: Path, reference: str = "HEAD") -> str:
     return result.stdout.strip()
 
 
-def validate_primary_workspace(workspace: Path, base_branch: str) -> tuple[bool, str]:
+def validate_primary_workspace(
+    workspace: Path,
+    base_branch: str,
+    allow_dirty_resume: bool = False,
+) -> tuple[bool, str]:
     status = run_git(workspace, ["status", "--porcelain=v1", "--untracked-files=all"])
     if status.returncode != 0:
         return False, "Cannot inspect Ubuntu workspace: " + git_error(status)
-    if status.stdout.strip():
+    dirty = bool(status.stdout.strip())
+    if dirty and not allow_dirty_resume:
         return False, "UBUNTU_WORKSPACE_DIRTY"
     branch = run_git(workspace, ["symbolic-ref", "--short", "HEAD"])
     if branch.returncode != 0 or branch.stdout.strip() != base_branch:
         return False, "UBUNTU_WORKSPACE_NOT_ON_MAIN"
-    return True, "UBUNTU_WORKSPACE_READY"
+    return True, "UBUNTU_WORKSPACE_RESUME_DIRTY" if dirty else "UBUNTU_WORKSPACE_READY"
 
 
 def run_publish_verification(
@@ -379,9 +385,28 @@ def prepare_job_workspace(
     base_branch = str(git_config.get("baseBranch", "main"))
     workspace_mode = str(git_config.get("workspaceMode", "worktree"))
     if execution_mode == "local" and workspace_mode == "primary":
-        ready, detail = validate_primary_workspace(source_workspace, base_branch)
+        # A capacity deferral may happen after valid edits.  This same job is
+        # allowed back into its own primary workspace, but no fetch/pull is
+        # attempted while those edits are present.
+        allow_dirty_resume = max(0, int(job.get("messageLimitWaits", 0) or 0)) > 0
+        ready, detail = validate_primary_workspace(
+            source_workspace,
+            base_branch,
+            allow_dirty_resume=allow_dirty_resume,
+        )
         if not ready:
             raise RuntimeError(detail)
+        if detail == "UBUNTU_WORKSPACE_RESUME_DIRTY":
+            return source_workspace, {
+                "source": source_workspace,
+                "worktree": source_workspace,
+                "branch": base_branch,
+                "remote": remote,
+                "baseBranch": base_branch,
+                "push": bool(git_config.get("push", False)),
+                "mode": "primary",
+                "workspaceOwnerJobId": str(job.get("rootJobId") or job["id"]),
+            }
         fetch = run_git(source_workspace, ["fetch", "--prune", remote, base_branch], timeout=300)
         if fetch.returncode != 0:
             raise RuntimeError("Cannot fetch Git base branch: " + git_error(fetch))
@@ -881,6 +906,8 @@ def update_result(
     pid: int | None = None,
     preflight: bool = False,
     final_answer: str | None = None,
+    retry_at: str = "",
+    message_limit_waits: int | None = None,
 ) -> None:
     path = "/api/jobs/" + parse.quote(job_id, safe="") + "/result"
     current = get_job(job_id) or {}
@@ -906,6 +933,8 @@ def update_result(
             "sessionId": session_id,
             "pid": pid,
             "preflight": preflight,
+            "retryAt": retry_at,
+            "messageLimitWaits": message_limit_waits,
         },
     )
 
@@ -1202,8 +1231,16 @@ def run_job(job: dict[str, Any]) -> None:
         return
 
     session_path = job_session_path(job_id)
+    deferred_state_path = session_path.parent / "deferred-state.json"
     if job.get("forceNewConversation") and session_path.exists():
         session_path.unlink()
+    # A manual retry resets the deferred wait budget. Do not let it inherit a
+    # stale controller snapshot; an actual scheduled retry has a positive wait
+    # count and keeps this file so it can resume exactly where it paused.
+    if deferred_state_path.exists() and (
+        job.get("forceNewConversation") or max(0, int(job.get("messageLimitWaits", 0) or 0)) == 0
+    ):
+        deferred_state_path.unlink()
 
     command = [
         AGENT,
@@ -1225,6 +1262,8 @@ def run_job(job: dict[str, Any]) -> None:
         WORKER_ID,
         "--worker-session-id",
         session_id,
+        "--message-limit-waits",
+        str(max(0, int(job.get("messageLimitWaits", 0)))),
     ]
     execution_mode = str(project_config.get("executionMode", "local"))
     git_config = project_config.get("git", {})
@@ -1240,6 +1279,7 @@ def run_job(job: dict[str, Any]) -> None:
     path = job_log_path(job_id)
     LOG.info("starting job=%s project=%s attempt=%s session=%s", job_id, cwd.name, attempts, session_id)
     started = time.time()
+    execution_started = parse_timestamp(job.get("executionStartedAt"), started)
     last_activity = parse_timestamp(job.get("activityAt"), started)
     failure = ""
     manually_stopped = False
@@ -1291,8 +1331,11 @@ def run_job(job: dict[str, Any]) -> None:
                 except Exception as exc:
                     LOG.warning("heartbeat failed job=%s: %r", job_id, exc)
                 last_heartbeat = now
-            if now - started > TOTAL_TIMEOUT_SECONDS:
-                failure = f"Dispatcher total timeout after {TOTAL_TIMEOUT_SECONDS} seconds."
+            if now - execution_started > TOTAL_TIMEOUT_SECONDS:
+                failure = (
+                    f"Dispatcher total timeout after {TOTAL_TIMEOUT_SECONDS} seconds "
+                    "since the job first started."
+                )
                 terminate_process(process)
                 break
             if now - last_activity > IDLE_TIMEOUT_SECONDS:
@@ -1311,6 +1354,32 @@ def run_job(job: dict[str, Any]) -> None:
         LOG.info("stopped job=%s by user", job_id)
         return
     protocol_output = agent_protocol_tail(output)
+    deferred_hint = agent_marker(protocol_output, DEFERRED_MARKER)
+    if deferred_hint is not None:
+        reason = deferred_hint.get("reason") or "ChatGPT message limit wait scheduled."
+        retry_at = deferred_hint.get("retryAt") or ""
+        try:
+            wait_count = max(0, int(deferred_hint.get("messageLimitWaits") or 0))
+        except ValueError:
+            wait_count = 0
+        update_result(
+            job_id,
+            "deferred",
+            reason,
+            compact(output, 6000),
+            session_id=session_id,
+            pid=process.pid,
+            retry_at=retry_at,
+            message_limit_waits=wait_count,
+        )
+        LOG.info(
+            "job=%s deferred until=%s message_limit_waits=%s",
+            job_id,
+            retry_at,
+            wait_count,
+        )
+        return
+
     blocked_hint = agent_marker(protocol_output, BLOCKED_MARKER)
     if blocked_hint is not None:
         # The agent reached a deterministic controller limit. It deliberately

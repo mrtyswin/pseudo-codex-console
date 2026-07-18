@@ -136,6 +136,7 @@ const navigateStart = source.indexOf("async function navigateWithRetry");
 assert.ok(navigateStart >= 0, "navigateWithRetry must exist");
 const navigateSource = source.slice(navigateStart, navigateStart + 2000);
 assert.match(source, /let throttleBackoffUntil = 0;/);
+assert.match(source, /const waitMs = THROTTLE_WAIT_MS \* \(2 \*\* \(attempt - 1\)\);/);
 assert.match(navigateSource, /respectThrottleBackoff\(log\)/);
 
 const loadRecoveryReload = new Function(
