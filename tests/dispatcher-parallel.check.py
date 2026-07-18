@@ -71,6 +71,7 @@ with tempfile.TemporaryDirectory() as temporary:
     assert module.is_infra_failure("ChatGPT browser request failed: [ERROR] spawnSync node ETIMEDOUT")
     assert module.is_infra_failure("[ERROR] CHATGPT_SEND_BUTTON_UNAVAILABLE after prompt input")
     assert module.is_infra_failure("ChatGPT browser request failed: [ERROR] [ERROR] Waiting failed: 60000ms exceeded")
+    assert module.is_infra_failure("ChatGPT browser request failed: [ERROR] [ERROR] socket hang up")
     assert not module.is_infra_failure("Agent exited 1; completion marker missing.")
     assert module.FORCED_RESTART_AFTER_FAILURES == 2
     assert module.note_infra_failure() is False
