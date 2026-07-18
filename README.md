@@ -60,6 +60,26 @@ python3 -m py_compile dispatcher/dispatcher.py scripts/chatgpt-compose.py script
 - 画面は3秒ごとに更新され、日時はJSTで表示される
 - 幅780px以下では一覧が簡略化され、選択したジョブの詳細が全画面で開く
 
+## Local AI Log Triage (experimental)
+
+Chrome built-in AI (Gemini Nano) can be used only as an advisory summary layer
+for failed command output. It is disabled by default and never executes model
+output, changes files, or replaces ChatGPT.
+
+To opt in after confirming Chrome model availability and host capacity, add the
+following environment variable to the browser-agent service and restart it:
+
+```ini
+Environment=PSEUDO_CODEX_NANO_TRIAGE=1
+```
+
+The agent opens a fixed localhost-only diagnostic page and records the result of
+`LanguageModel.availability()`. Only `available` runs summarize a redacted,
+size-limited failed command log. The returned value must be valid JSON with the
+expected summary fields; otherwise it is discarded and the normal job flow
+continues unchanged. Use `node agent/chatgpt.js --nano-status` to inspect the
+current browser daemon after enabling the flag.
+
 ## Request-Console Self-Update
 
 `request-console` 自身の改修もブラウザ queue から登録できます。dispatcher は通常 workspace の `main` を直接編集せず、ジョブ専用の Git worktree と branch で変更・検証・公開を行います。GitHub `main` への反映後、Ubuntu `main` は `pull --ff-only` とテストと deploy だけを担当します。
