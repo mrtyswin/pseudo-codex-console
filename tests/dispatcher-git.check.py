@@ -134,6 +134,18 @@ def main() -> None:
         if workspace.exists():
             raise AssertionError("completed worktree was not removed")
 
+        # A follow-up after completion uses the original branch. The original
+        # worktree was removed above, so it must be attached again rather than
+        # recreated with -b and rejected as an existing branch.
+        resumed_workspace, resumed_context = dispatcher.prepare_job_workspace(
+            continuation_job, source.resolve()
+        )
+        if resumed_workspace != workspace or resumed_context is None:
+            raise AssertionError("completed-job continuation did not reuse worktree path")
+        if resumed_context.get("branch") != context.get("branch"):
+            raise AssertionError("completed-job continuation changed branch")
+        dispatcher.cleanup_git_worktree(resumed_context)
+
         dispatcher.PROJECT_CONFIGS["fixture-project"]["git"]["workspaceMode"] = "primary"
         primary_job = {
             "id": "33333333-4444-4555-8666-777777777777",
