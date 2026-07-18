@@ -205,6 +205,39 @@ def main() -> None:
         if git(remote, "show", "main:app.js") != "module.exports = 'candidate';":
             raise AssertionError("auto-recovered publication did not reach remote main")
 
+        # A rerun whose branch predates newer base commits used to be doomed:
+        # ChatGPT finished its work and publish died on GIT_REBASE_CONFLICT.
+        # The stale commits must be archived and the branch restarted from the
+        # current base before the agent runs.
+        stale_job = {
+            "id": "44444444-5555-4666-8777-888888888888",
+            "project": "fixture-project",
+            "title": "Stale branch refresh check",
+        }
+        stale_workspace, stale_context = dispatcher.prepare_job_workspace(stale_job, source.resolve())
+        (stale_workspace / "app.js").write_text("module.exports = 'stale';\n", encoding="utf-8")
+        git(stale_workspace, "add", "app.js")
+        git(stale_workspace, "commit", "-m", "stale work")
+        (source / "app.js").write_text("module.exports = 'mainline';\n", encoding="utf-8")
+        git(source, "add", "app.js")
+        git(source, "commit", "-m", "mainline change")
+        git(source, "push", "origin", "main")
+        refreshed_workspace, _refreshed_context = dispatcher.prepare_job_workspace(stale_job, source.resolve())
+        if refreshed_workspace != stale_workspace:
+            raise AssertionError("refresh changed the worktree path")
+        refreshed_app = (refreshed_workspace / "app.js").read_text(encoding="utf-8")
+        if refreshed_app != "module.exports = 'mainline';\n":
+            raise AssertionError("stale branch was not reset onto the current base: " + refreshed_app)
+        archives = git(stale_workspace, "branch", "--list", "archive/*")
+        if "archive/" not in archives:
+            raise AssertionError("conflicting stale work was not archived: " + archives)
+
+        # In-progress edits must survive a reuse untouched.
+        (stale_workspace / "app.js").write_text("module.exports = 'wip';\n", encoding="utf-8")
+        dispatcher.prepare_job_workspace(stale_job, source.resolve())
+        if (stale_workspace / "app.js").read_text(encoding="utf-8") != "module.exports = 'wip';\n":
+            raise AssertionError("dirty worktree was clobbered by the refresh")
+
         print("DISPATCHER_GIT_MAIN_SYNC_OK")
     finally:
         shutil.rmtree(root, ignore_errors=True)

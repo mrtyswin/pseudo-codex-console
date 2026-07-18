@@ -498,6 +498,8 @@ def prepare_job_workspace(
     worktree.parent.mkdir(parents=True, exist_ok=True)
 
     if (worktree / ".git").exists():
+        refresh_note = refresh_job_worktree(worktree, remote, base_branch, branch)
+        LOG.info("job=%s worktree refresh: %s", job.get("id"), refresh_note)
         return worktree, {
             "source": source_workspace,
             "worktree": worktree,
@@ -533,6 +535,10 @@ def prepare_job_workspace(
     )
     if add.returncode != 0:
         raise RuntimeError("Cannot create job Git worktree: " + git_error(add))
+    if branch_exists.returncode == 0:
+        # The reattached branch may predate newer base-branch commits.
+        refresh_note = refresh_job_worktree(worktree, remote, base_branch, branch)
+        LOG.info("job=%s worktree refresh: %s", job.get("id"), refresh_note)
     return worktree, {
         "source": source_workspace,
         "worktree": worktree,
@@ -543,6 +549,38 @@ def prepare_job_workspace(
         "mode": "local",
         "workspaceOwnerJobId": workspace_owner,
     }
+
+
+def refresh_job_worktree(worktree: Path, remote: str, base_branch: str, branch: str) -> str:
+    """Bring a reused job worktree up to date with the base branch.
+
+    A failed job's branch keeps aging while the base branch moves on. Left
+    alone, every rerun finished its ChatGPT work and then died on the same
+    GIT_REBASE_CONFLICT at publish time — the job was unwinnable before it
+    started. If the old commits no longer rebase cleanly, they are parked on
+    an archive branch and the job branch restarts from the current base.
+    In-progress (dirty) worktrees are left untouched.
+    """
+    status = run_git(worktree, ["status", "--porcelain=v1", "--untracked-files=all"])
+    if status.returncode != 0:
+        return "WORKTREE_REFRESH_STATUS_FAILED: " + git_error(status)
+    if status.stdout.strip():
+        return "WORKTREE_REFRESH_SKIPPED_DIRTY"
+    fetch = run_git(worktree, ["fetch", "--prune", remote, base_branch], timeout=300)
+    if fetch.returncode != 0:
+        return "WORKTREE_REFRESH_FETCH_FAILED: " + git_error(fetch)
+    rebase = run_git(worktree, ["rebase", f"{remote}/{base_branch}"], timeout=300)
+    if rebase.returncode == 0:
+        return "WORKTREE_REBASED_ONTO_BASE"
+    run_git(worktree, ["rebase", "--abort"])
+    backup = "archive/" + branch.replace("/", "-") + "-" + time.strftime("%Y%m%d-%H%M%S")
+    backup_result = run_git(worktree, ["branch", backup])
+    if backup_result.returncode != 0:
+        return "WORKTREE_REFRESH_BACKUP_FAILED: " + git_error(backup_result)
+    reset = run_git(worktree, ["reset", "--hard", f"{remote}/{base_branch}"])
+    if reset.returncode != 0:
+        return "WORKTREE_REFRESH_RESET_FAILED: " + git_error(reset)
+    return f"WORKTREE_RESET_TO_BASE conflict_backup={backup}"
 
 
 def publish_git_changes(
