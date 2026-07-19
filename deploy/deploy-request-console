@@ -19,6 +19,7 @@ declare -a writable_specs=(
   "$project/dispatcher/dispatcher.py|$dispatcher_runtime|0644|dispatcher"
   "$project/agent/agent.js|$agent_runtime_root/agent.js|0644|agent"
   "$project/agent/chatgpt.js|$agent_runtime_root/chatgpt.js|0644|agent"
+  "$project/agent/ws-decode.js|$agent_runtime_root/ws-decode.js|0644|agent"
   "$project/systemd/pseudo-codex-dispatcher.service.d/20-browser-pool.conf|/home/ubuntu/.config/systemd/user/pseudo-codex-dispatcher.service.d/20-browser-pool.conf|0644|dispatcher"
 )
 
@@ -199,6 +200,7 @@ python3 -m py_compile "$project/dispatcher/dispatcher.py"
 bash -n "$project/scripts/chatgpt-browser-agent"
 node --check "$project/agent/agent.js"
 node --check "$project/agent/chatgpt.js"
+node --check "$project/agent/ws-decode.js"
 APP_PATH="$project/app.js" node "$project/check.js"
 
 for spec in "${writable_specs[@]}"; do

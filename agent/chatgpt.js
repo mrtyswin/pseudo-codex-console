@@ -26,6 +26,7 @@ const fs                  = require('fs');
 const http                = require('http');
 const readline            = require('readline');
 const { execSync, spawn } = require('child_process');
+const { decodeConversationFrames } = require('./ws-decode');
 
 const browserClientPath = process.env.PSEUDO_CODEX_BROWSER_CLIENT || '';
 const browserClient = browserClientPath
@@ -758,6 +759,52 @@ async function extractLastAssistantMessage(page) {
   });
 }
 
+// ─── Response capture via page CDP WebSocket events ─────────────────────────
+// ChatGPT streams the answer over a per-tab WebSocket (wss://.../p16/ws/user/…)
+// as delta_encoding v1 events tunneled in each frame's `encoded_item`. Reading
+// the rendered DOM instead loses markdown (code fences, diff +/-/space) — the
+// historical cause of broken patches. We keep DOM for completion TIMING (which
+// is reliable) but decode the WS frames for lossless CONTENT.
+//   off (default): unchanged, DOM only.
+//   shadow: decode too, log WS-vs-DOM comparison, but still use DOM.
+//   on: use the WS-decoded text; fall back to DOM when it is empty.
+const configuredWsCaptureMode = String(process.env.PSEUDO_CODEX_WS_CAPTURE || '').toLowerCase();
+const WS_CAPTURE_MODE = configuredWsCaptureMode === 'shadow' || configuredWsCaptureMode === 'on'
+  ? configuredWsCaptureMode
+  : 'off';
+const WS_FRAME_BUFFER_LIMIT = 20_000;
+
+async function installWsCapture(page, log) {
+  if (WS_CAPTURE_MODE === 'off') return;
+  const frames = [];
+  page.__wsFrames = frames;
+  try {
+    const cdp = await page.createCDPSession();
+    await cdp.send('Network.enable');
+    cdp.on('Network.webSocketFrameReceived', event => {
+      const payload = event && event.response && event.response.payloadData;
+      if (typeof payload !== 'string' || !payload.includes('encoded_item')) return;
+      frames.push(payload);
+      if (frames.length > WS_FRAME_BUFFER_LIMIT) frames.shift();
+    });
+  } catch (error) {
+    log(`WS capture setup failed: ${error.message}`);
+  }
+}
+
+// Decode the frames captured for the just-finished turn (everything appended
+// since `startLen`). Completion timing is owned by the caller (DOM); this only
+// reconstructs the text, so it must run AFTER the turn is known to be complete.
+function decodeCapturedTurn(page, startLen) {
+  const frames = page.__wsFrames || [];
+  if (frames.length <= startLen) return null;
+  try {
+    return decodeConversationFrames(frames.slice(startLen));
+  } catch (error) {
+    return { error: String((error && error.message) || error) };
+  }
+}
+
 // ─── Daemon process ───────────────────────────────────────────────────────────
 
 async function startDaemonProcess() {
@@ -776,6 +823,7 @@ async function startDaemonProcess() {
   try {
     browser = await launchBrowser();
     defaultPage = await browser.newPage();
+    await installWsCapture(defaultPage, log);
 
     const initUrl = fs.existsSync(SESSION_FILE)
       ? fs.readFileSync(SESSION_FILE, 'utf8').trim()
@@ -929,6 +977,7 @@ async function startDaemonProcess() {
     if (!sessions.has(key)) {
       sessions.set(key, (async () => {
         const page = await browser.newPage();
+        await installWsCapture(page, log);
         const initialUrl = readSessionUrl(activeSessionFile);
         await navigateSessionPage(page, initialUrl);
         return { page, tail: Promise.resolve(), conversationUrl: initialUrl };
@@ -1051,6 +1100,7 @@ async function startDaemonProcess() {
                 ? adapterResult.response
                 : adapterResult;
             } else {
+              let wsStart = 0;
               const beforeState = await withBrowserInteraction(page, async () => {
                 await throwIfUsageLimited(page, log);
                 if (uploadPath) await uploadFileToChatGPT(page, uploadPath, log);
@@ -1065,9 +1115,13 @@ async function startDaemonProcess() {
                   );
                   log('Send button is now enabled.');
                 }
+                // Mark the WS buffer position for this turn just before sending.
+                if (WS_CAPTURE_MODE !== 'off') wsStart = (page.__wsFrames || []).length;
                 return submitPrompt(page, fullPrompt, log);
               });
               log('Prompt sent, waiting for response...');
+              // DOM owns completion TIMING (reliable). Wait for the turn to end,
+              // then read the answer — from lossless WS frames when possible.
               await waitWithRecovery(
                 page,
                 fullPrompt,
@@ -1075,7 +1129,23 @@ async function startDaemonProcess() {
                 beforeState,
                 task => withBrowserInteraction(page, task)
               );
-              raw = await extractLastAssistantMessage(page);
+              const domRaw = await extractLastAssistantMessage(page);
+              raw = domRaw;
+              if (WS_CAPTURE_MODE !== 'off') {
+                const decoded = decodeCapturedTurn(page, wsStart);
+                const wsText = decoded && !decoded.error ? (decoded.text || '') : '';
+                if (WS_CAPTURE_MODE === 'shadow') {
+                  const domText = domRaw || '';
+                  log(`WS shadow: wsChars=${wsText.length} wsHead=${JSON.stringify(wsText.slice(0, 60))} domChars=${domText.length} domHead=${JSON.stringify(domText.slice(0, 60))} done=${decoded ? decoded.done === true : false} match=${wsText === domText}${decoded && decoded.error ? ' error=' + decoded.error : ''}`);
+                } else if (WS_CAPTURE_MODE === 'on') {
+                  if (wsText) {
+                    raw = wsText;
+                    log(`WS on: used ws-decode chars=${wsText.length} done=${decoded.done === true}`);
+                  } else {
+                    log(`WS on: fell back to DOM (no ws-decode result${decoded && decoded.error ? ': ' + decoded.error : ''})`);
+                  }
+                }
+              }
             }
 
             const finalUrl = page.url();
