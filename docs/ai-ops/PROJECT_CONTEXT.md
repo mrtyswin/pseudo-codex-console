@@ -52,13 +52,14 @@ GitHub: `mrtyswin/pseudo-codex-console`。
    → **`/home/ubuntu/chatgpt-browser-agent/*.js` を直接編集してもデプロイで消える。** 変更は必ず
    `request-console/agent/` に入れ、**新規モジュールは manifest のリストにも追加**しないと配備されず
    `require` で即死する。（2026-07-19 に実際にハマった。）
-2. **添付画像のアップロードは修正済み（2026-07-19, PR #59）。** かつては添付スクショが
+2. **添付のアップロードは修正済み（2026-07-19, PR #59 → #61 で複数・全種類対応）。** かつては添付が
    コンソール側ディスクに保存されても指示テキストにパスが埋まるだけで、`agent.js` が
    `chatgpt.js` に `--upload` を渡さず、ChatGPT が画像を見ずに位置を推測して外していた（`upload=none`）。
-   現在は `agent.js` の `extractUploadImagePath` が指示の「参考ファイル」ブロックから最初の画像を拾い、
-   最初のターンだけ `--upload` で渡す。実機で固有文字画像を正確に読めることを確認済み。
-   **残る注意点**: `--upload` は単一のため、添付が複数でも先頭 1 枚のみ visual アップロード
-   （残りはパス参照のまま）。詳細は `DECISIONS.md` ADR-006。
+   現在は `agent.js` の `extractUploadPaths` が指示の「参考ファイル」ブロックから**全ての読取可能な
+   ファイル（画像/PDF/テキスト等・種別不問・複数）**を拾い、最初のターンだけ繰り返し `--upload` で渡す。
+   `chatgpt.js` は `inputHandle.uploadFile(...paths)` で一括アップロード（存在しないものは skip、
+   ジョブは落とさない）。実機で画像2枚＋テキスト1枚を全て正確に読めることを確認済み。詳細は
+   `DECISIONS.md` ADR-006。
 3. **ChatGPT ブラウザは不安定。** 無応答・接続断・タイムアウトが起きる。これらは「ジョブの失敗」でなく
    インフラ障害として扱い、attempt を消費せず自動再キューする仕組みが入っている（`infraRetries`）。
    分類語: `ETIMEDOUT` / `Waiting failed:` / `socket hang up` / `Protocol error` / `browser remained unresponsive` 等。
@@ -85,7 +86,7 @@ GitHub: `mrtyswin/pseudo-codex-console`。
 ## 現在の未完了事項（2026-07-19 時点）
 
 - 受信 WS 化の v2: 完了タイミングも WS で検出して DOM 依存を外す（今は DOM 完了待ち + infra-retry で実用十分）。
-- 添付が複数画像の場合、先頭 1 枚しか visual アップロードされない（残りはパス参照）。複数画像対応は未着手。
+- （添付アップロードは複数・全種類とも対応済み。特筆の未完了なし。）
 - 旧い失敗ジョブ（7/17 分）の一部が UI 上「失敗」表示のまま（実体は解決済み）。
 - 添付/コード/差分のテストフィクスチャ拡充。
 
