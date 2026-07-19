@@ -134,3 +134,4 @@ GitHubのSSH鍵やトークンはUbuntuのGit credentialまたはSSH agentへ保
 - 本番バックアップと一時ファイル
 
 公開用設定は必ず `projects.example.json` のようなダミー値だけにしてください。
+- 応答受信はWebSocket(delta_encoding v1)のCDPキャプチャで生テキストを取得（DOM崩れ回避）
