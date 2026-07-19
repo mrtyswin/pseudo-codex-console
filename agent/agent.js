@@ -142,9 +142,9 @@ function parseArgs(argv) {
 
 // ─── ChatGPT call ─────────────────────────────────────────────────────────────
 
-function extractUploadImagePath(taskText) {
+function extractUploadPaths(taskText) {
   const attachmentHeader = '参考ファイル（クリップボード貼り付け）:';
-  const imagePathPattern = /\.(?:png|jpe?g|gif|webp)$/i;
+  const uploadPaths = [];
   let inAttachmentBlock = false;
 
   for (const line of String(taskText || '').replace(/\r\n?/g, '\n').split('\n')) {
@@ -160,19 +160,18 @@ function extractUploadImagePath(taskText) {
     }
 
     const uploadPath = match[1].trim();
-    if (!imagePathPattern.test(uploadPath)) continue;
     try {
       fs.accessSync(uploadPath, fs.constants.R_OK);
-      if (fs.statSync(uploadPath).isFile()) return uploadPath;
+      if (fs.statSync(uploadPath).isFile()) uploadPaths.push(uploadPath);
     } catch (_error) {
       // A deleted or unreadable attachment must not interrupt the job.
     }
   }
 
-  return null;
+  return uploadPaths;
 }
 
-function ask(prompt, isNew = false, sessionFile = null, sessionKey = null, uploadPath = null) {
+function ask(prompt, isNew = false, sessionFile = null, sessionKey = null, uploadPaths = []) {
   // Keep large command output out of argv so the OS argument-size limit cannot
   // terminate a job. The browser client reads this file before making its HTTP request.
   const promptDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'pseudo-codex-prompt-'));
@@ -182,7 +181,7 @@ function ask(prompt, isNew = false, sessionFile = null, sessionKey = null, uploa
   if (isNew) flags.push('--new');
   if (sessionFile) flags.push('--session-file', sessionFile);
   if (sessionKey) flags.push('--session-key', sessionKey);
-  if (uploadPath) flags.push('--upload', uploadPath);
+  for (const uploadPath of uploadPaths) flags.push('--upload', uploadPath);
   flags.push('--prompt-file', promptFile);
 
   try {
@@ -1199,7 +1198,7 @@ async function main() {
     return;
   }
 
-  const uploadImagePath = extractUploadImagePath(args.task);
+  const uploadPaths = extractUploadPaths(args.task);
 
   console.log(`\nTask : ${args.task}`);
   console.log(`CWD  : ${args.cwd}`);
@@ -1505,7 +1504,7 @@ async function main() {
       isNew,
       args.sessionFile,
       args.sessionKey,
-      turns === 1 ? uploadImagePath : null
+      turns === 1 ? uploadPaths : []
     );
     if (/^\[ERROR\].*CHATGPT_MESSAGE_LIMIT/m.test(response)) {
       const nextWait = args.messageLimitWaits + 1;
@@ -1838,7 +1837,7 @@ module.exports = {
   buildInitialPrompt,
   cleanFinalAnswer,
   commandValidationError,
-  extractUploadImagePath,
+  extractUploadPaths,
   isHostOnlyCommand,
   parseActionTarget,
   parseEditBlocks,

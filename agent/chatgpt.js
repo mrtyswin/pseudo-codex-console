@@ -225,16 +225,25 @@ function buildFullPrompt({ userPrompt, stdinData, fileData, gitData, contextData
  * After setting the files via CDP we fire a synthetic change event so React's
  * event system picks up the new FileList and registers the attachment.
  */
-async function uploadFileToChatGPT(page, uploadPath, log) {
-  const abs = path.resolve(uploadPath);
-  if (!fs.existsSync(abs)) throw new Error(`Upload file not found: ${abs}`);
-  log(`Uploading file: ${abs}`);
+async function uploadFileToChatGPT(page, uploadPaths, log) {
+  const list = Array.isArray(uploadPaths) ? uploadPaths : [uploadPaths];
+  const abses = [];
+  for (const uploadPath of list) {
+    const abs = path.resolve(uploadPath);
+    if (!fs.existsSync(abs)) {
+      log(`Upload file not found; skipping: ${abs}`);
+      continue;
+    }
+    abses.push(abs);
+  }
+  if (!abses.length) return;
+  log(`Uploading ${abses.length} file(s): ${abses.join(', ')}`);
 
   // Wait for the hidden file input to be present in the DOM
   const inputHandle = await page.waitForSelector('#upload-files', { timeout: 8_000 });
 
   // CDP-level file injection — no dialog needed
-  await inputHandle.uploadFile(abs);
+  await inputHandle.uploadFile(...abses);
 
   // Notify React that the input's FileList changed
   await page.evaluate(() => {
@@ -256,7 +265,7 @@ async function uploadFileToChatGPT(page, uploadPath, log) {
     await new Promise(r => setTimeout(r, 800));
   }
 
-  log('Upload complete.');
+  log(`Upload complete: ${abses.length} file(s).`);
 }
 
 function launchBrowser() {
@@ -1051,10 +1060,12 @@ async function startDaemonProcess() {
             fullPrompt,
             codeOnly,
             newChat,
-            uploadPath,
             sessionFile,
             sessionKey,
           } = payload;
+          const uploadPaths = Array.isArray(payload.uploadPaths)
+            ? payload.uploadPaths
+            : (payload.uploadPath ? [payload.uploadPath] : []);
           const activeSessionFile = sessionFile || SESSION_FILE;
           const key = String(
             sessionKey || (activeSessionFile === SESSION_FILE ? 'default' : activeSessionFile)
@@ -1064,7 +1075,7 @@ async function startDaemonProcess() {
           const result = await enqueue(state, async () => {
             const page = state.page;
             const sessionUrl = state.conversationUrl || readSessionUrl(activeSessionFile);
-            log(`ask: sessionKey=${key} newChat=${newChat} codeOnly=${codeOnly} upload=${uploadPath || 'none'} len=${String(fullPrompt || '').length}`);
+            log(`ask: sessionKey=${key} newChat=${newChat} codeOnly=${codeOnly} upload=${uploadPaths.length ? uploadPaths.join(',') : 'none'} len=${String(fullPrompt || '').length}`);
 
             const currentUrl = page.url();
             if (newChat) {
@@ -1091,7 +1102,7 @@ async function startDaemonProcess() {
                 fullPrompt,
                 codeOnly,
                 newChat,
-                uploadPath,
+                uploadPaths,
                 sessionKey: key,
                 sessionFile: activeSessionFile,
                 log,
@@ -1103,8 +1114,8 @@ async function startDaemonProcess() {
               let wsStart = 0;
               const beforeState = await withBrowserInteraction(page, async () => {
                 await throwIfUsageLimited(page, log);
-                if (uploadPath) await uploadFileToChatGPT(page, uploadPath, log);
-                if (uploadPath) {
+                if (uploadPaths.length) await uploadFileToChatGPT(page, uploadPaths, log);
+                if (uploadPaths.length) {
                   log('Waiting for send button to become enabled (file upload in progress)...');
                   await page.waitForFunction(
                     () => {
@@ -1314,7 +1325,7 @@ async function login() {
 function parseArgs(argv) {
   const args = argv.slice(2);
   const opts = {
-    login: false, codeOnly: false, file: null, upload: null, save: null,
+    login: false, codeOnly: false, file: null, save: null,
     git: false, context: null, newChat: false, start: false, stop: false, status: false,
     daemonInternal: false, cwd: null, sessionFile: null, sessionKey: null, promptFile: null,
     nanoStatus: false, nanoSummarizeFile: null, prompt: [],
@@ -1330,7 +1341,7 @@ function parseArgs(argv) {
       case '--status':          opts.status         = true;  break;
       case '--daemon-internal': opts.daemonInternal = true;  break;
       case '--file':            opts.file    = args[++i];    break;
-      case '--upload':          opts.upload  = args[++i];    break;
+      case '--upload':          (opts.uploads = opts.uploads || []).push(args[++i]); break;
       case '--save':            opts.save    = args[++i];    break;
       case '--context':         opts.context = args[++i];    break;
       case '--cwd':             opts.cwd     = args[++i];    break;
@@ -1353,7 +1364,7 @@ Usage:
   node chatgpt.js --new "prompt"                        # force a new chat
   node chatgpt.js --code "write fizzbuzz in Go"         # extract code blocks only
   node chatgpt.js --file <path> "prompt"                # paste file content as text in prompt
-  node chatgpt.js --upload <path> "prompt"              # upload file via ChatGPT attachment button
+  node chatgpt.js --upload <path> [--upload <path>...] "prompt" # upload files via ChatGPT attachment button
   node chatgpt.js --save <path> "prompt"                # save response to a file
   node chatgpt.js --git "write a commit message"        # attach git diff/status
   node chatgpt.js --context "we use Fiber v2" "prompt"  # inline context
@@ -1438,7 +1449,7 @@ Usage:
     const port   = await ensureDaemon();
     const result = await httpPost(port, '/ask', {
       fullPrompt, codeOnly: opts.codeOnly, newChat: opts.newChat,
-      uploadPath: opts.upload || null, sessionFile: opts.sessionFile,
+      uploadPaths: opts.uploads || [], sessionFile: opts.sessionFile,
       sessionKey: opts.sessionKey,
     });
     if (!result.ok) throw new Error(result.error || 'Daemon returned an error');
