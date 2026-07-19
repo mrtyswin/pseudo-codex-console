@@ -826,7 +826,7 @@ function compactOutput(value) {
   return `[output truncated; ${clean.length} characters total]\n` + clean.slice(-COMMAND_OUTPUT_LIMIT);
 }
 
-function commandValidationError(command) {
+function commandValidationError(command, allowDirectMutation = false) {
   const unsafeTypography = command.match(/[\u2018\u2019\u201c\u201d\u2013\u2014\u2212\uff0d\uff5c]/u);
   if (unsafeTypography) {
     return `Refused command containing typographic shell character U+${unsafeTypography[0].codePointAt(0).toString(16).toUpperCase()}. Resend it with ASCII quotes, hyphens, or pipes.`;
@@ -839,9 +839,10 @@ function commandValidationError(command) {
     return 'Refused encoded patch payload in RUN block. Use a unified PATCH block instead.';
   }
   if (
+    !allowDirectMutation &&
     /\b(?:sed|perl)\b[^\n]*(?:-i|-pi)\b/i.test(command) ||
-    /python\d*\s+-c\b[\s\S]*(?:write_text|write_bytes|open\s*\([^)]*,\s*['"]w)/i.test(command) ||
-    /python\d*\s+-\s*<<[\s\S]*(?:write_text|write_bytes|open\s*\()/i.test(command)
+    !allowDirectMutation && /python\d*\s+-c\b[\s\S]*(?:write_text|write_bytes|open\s*\([^)]*,\s*['"]w)/i.test(command) ||
+    !allowDirectMutation && /python\d*\s+-\s*<<[\s\S]*(?:write_text|write_bytes|open\s*\()/i.test(command)
   ) {
     return 'Refused direct file mutation inside a RUN block. Use PATCH, EDIT, REPLACE, or FILE so whitespace and rollback checks remain deterministic.';
   }
@@ -852,7 +853,7 @@ function normalizedCommandKey(command) {
   return String(command).trim().replace(/[ \t]+/g, ' ').replace(/\n+/g, '\n');
 }
 
-async function execCommands(commands, cwd, auto, onCommand, commandFailures) {
+async function execCommands(commands, cwd, auto, onCommand, commandFailures, allowDirectMutation = false) {
   const results = [];
   for (const cmd of commands) {
     console.log(`\n$ ${cmd}`);
@@ -869,7 +870,7 @@ async function execCommands(commands, cwd, auto, onCommand, commandFailures) {
         results.push({ cmd, output, status: 2 });
         continue;
       }
-      const validationError = commandValidationError(cmd);
+      const validationError = commandValidationError(cmd, allowDirectMutation);
       if (validationError) {
         console.log(validationError);
         results.push({ cmd, output: validationError, status: 2 });
@@ -1704,8 +1705,16 @@ async function main() {
           'Ubuntuコマンド実行中',
           statePayload({ currentCommand: command.slice(0, 2000) })
         ),
-        commandFailures
+        commandFailures,
+        args.hostNative && args.executionMode === 'local'
       );
+      const afterCommands = workspaceSnapshot(args.cwd);
+      const commandChanges = changedFilesBetween(initialSnapshot, afterCommands);
+      if (commandChanges.length > 0) {
+        for (const file of commandChanges) changedFiles.add(file);
+        hasEdited = true;
+        verificationPassed = false;
+      }
       const resultText = buildCommandResults(results);
       executionLog.push(resultText);
       const repeatedFailure = recordResults(results);
