@@ -67,3 +67,18 @@
   ファイルリストと `node --check` 検証にも追加する。PR → deploy で永続化。
 - 影響: 変更がデプロイ後も残る。配備漏れによる起動失敗を防ぐ。
 - 将来見直す条件: 配備方式が rsync 全同期等に変わったら manifest 追記は不要になる。
+
+## ADR-006: 添付画像は最初のターンだけ --upload で ChatGPT に渡す  (2026-07-19, status: adopted)
+- 背景: コンソールは添付画像をディスク保存し、指示テキストに「参考ファイル」ブロックとしてパスを
+  埋め込むだけだった。`agent.js` が `chatgpt.js` に `--upload` を渡さず、画像は visual アップロード
+  されず（`upload=none`）、ChatGPT が画像を見ずに位置を推測して外していた。
+- 決定: `agent.js` の `extractUploadImagePath(taskText)` が「参考ファイル」ブロックから最初の読取可能な
+  画像（.png/.jpg/.jpeg/.gif/.webp）を拾い、run ループの **turns===1 の時だけ** `ask(..., uploadPath)` →
+  `--upload` を渡す。`chatgpt.js` 側のアップロード（`uploadFileToChatGPT`）は既存を再利用。
+- 理由: 送信側だけ繋げば済む最小変更。2 ターン目以降（RUN 出力の往復）で再アップロードしないため
+  turns===1 に限定。実機で固有文字画像を正確に読めることを検証（`upload=` が実パスになり、回答が
+  画像内容と一致）。
+- 却下した案: (a) dispatcher から明示 --upload を渡す → dispatcher は添付を知らず、パスは instruction 内に
+  しかない。(b) 全ターンでアップロード → 無駄・誤爆。
+- 影響: 画像添付ジョブで ChatGPT が実際に画像を見る。添付が無ければ挙動不変。
+- 将来見直す条件: 複数画像を同時に見せたい場合は `--upload` の複数対応 or 別の添付方式が要る（現状は先頭 1 枚）。
